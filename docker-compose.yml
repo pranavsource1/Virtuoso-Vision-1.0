@@ -1,0 +1,184 @@
+services:
+  # ============ Backend API ============
+  backend:
+    build: ./packages/backend
+    container_name: virtuoso_backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./packages/backend/app:/app/app
+      - backend_media:/app/media
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    env_file:
+      - ./packages/backend/.env
+    environment:
+      - MONGODB_URL=mongodb://mongodb:27017/virtuosovision
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - OLLAMA_API_URL=http://ollama:11434
+    depends_on:
+      mongodb:
+        condition: service_started
+      redis:
+        condition: service_started
+      ollama-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    networks:
+      - virtuoso_network
+
+  # ============ MongoDB (Document Database) ============
+  mongodb:
+    image: mongo:latest
+    container_name: virtuoso_mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+    environment:
+      - MONGO_INITDB_DATABASE=virtuosovision
+    restart: unless-stopped
+    networks:
+      - virtuoso_network
+
+  # ============ Redis (Cache & Message Broker) ============
+  redis:
+    image: redis:latest
+    container_name: virtuoso_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+    networks:
+      - virtuoso_network
+
+  # ============ Celery Worker (Background Tasks) ============
+  worker:
+    build: ./packages/backend
+    container_name: virtuoso_worker
+    command: celery -A app.workers.celery_app.app worker -l info --pool=solo
+    volumes:
+      - ./packages/backend/app:/app/app
+      - backend_media:/app/media
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    env_file:
+      - ./packages/backend/.env
+    environment:
+      - MONGODB_URL=mongodb://mongodb:27017/virtuosovision
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - OLLAMA_API_URL=http://ollama:11434
+    depends_on:
+      mongodb:
+        condition: service_started
+      redis:
+        condition: service_started
+      ollama-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    networks:
+      - virtuoso_network
+
+  # ============ Celery Beat (Scheduled Tasks) ============
+  celery_beat:
+    build: ./packages/backend
+    container_name: virtuoso_beat
+    command: celery -A app.workers.celery_app.app beat -l info
+    volumes:
+      - ./packages/backend/app:/app/app
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    env_file:
+      - ./packages/backend/.env
+    environment:
+      - MONGODB_URL=mongodb://mongodb:27017/virtuosovision
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      - mongodb
+      - redis
+    restart: unless-stopped
+    networks:
+      - virtuoso_network
+
+  # ============ Ollama (Local LLM with GPU) ============
+  ollama:
+    image: ollama/ollama:latest
+    container_name: virtuoso_ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0:11434
+      - OLLAMA_FLASH_ATTENTION=1
+      - OLLAMA_CONTEXT_LENGTH=2048
+      - NVIDIA_VISIBLE_DEVICES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+    networks:
+      - virtuoso_network
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ============ Ollama Model Init (pulls mistral on startup) ============
+  ollama-init:
+    image: ollama/ollama:latest
+    container_name: virtuoso_ollama_init
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo '⏳ Pulling mistral model...'
+        ollama pull mistral
+        echo '✅ Mistral model ready!'
+    environment:
+      - OLLAMA_HOST=ollama:11434
+    restart: "no"
+    networks:
+      - virtuoso_network
+
+  # ============ Frontend (Optional - if using Docker for frontend) ============
+  # frontend:
+  #   build: ./packages/frontend
+  #   container_name: virtuoso_frontend
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     - REACT_APP_API_URL=http://localhost:8000
+  #   depends_on:
+  #     - backend
+  #   restart: unless-stopped
+  #   networks:
+  #     - virtuoso_network
+
+volumes:
+  mongodb_data:
+  mongodb_config:
+  redis_data:
+  ollama_data:
+  backend_media:
+
+networks:
+  virtuoso_network:
+    driver: bridge
