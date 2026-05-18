@@ -23,4 +23,7 @@ app.conf.update(
     broker_connection_retry_on_startup=True,
 )
 
+# Auto-discover tasks from app.workers module
+app.autodiscover_tasks(['app.workers'])
+
 __all__ = ["app"]

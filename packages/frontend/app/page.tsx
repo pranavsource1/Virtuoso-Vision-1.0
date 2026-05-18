@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { NavBar, UploadModal } from '@/components/ui';
+import { NavBar, UploadModal, TransformationLoadingModal } from '@/components/ui';
 import { Scene } from '@/components/3d/Scene';
 import { motion } from 'framer-motion';
 import { Sparkles, Music, Globe, Zap, ArrowRight, Play } from 'lucide-react';
@@ -14,6 +14,9 @@ export default function HomePage() {
   const router = useRouter();
   const [uploadModal, setUploadModal] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [transformationModal, setTransformationModal] = useState(false);
+  const [taskId, setTaskId] = useState('');
+  const [songTitle, setSongTitle] = useState('');
 
   useEffect(() => {
     // Sync current auth state whenever it changes
@@ -38,22 +41,31 @@ export default function HomePage() {
 
   const handleUpload = async (url: string, title?: string) => {
     try {
+      setSongTitle(title || 'Your Song');
       const { data, error } = await uploadSong(url, title);
 
       if (error) {
         throw new Error(error);
       }
 
-      toast.success(`Processing started! Task ID: ${data?.taskId}`);
+      // Show transformation loading modal
+      setTaskId(data?.taskId || '');
+      setTransformationModal(true);
       setUploadModal(false);
-
-      setTimeout(() => {
-        router.push('/explore');
-      }, 2000);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Upload failed');
       throw error;
     }
+  };
+
+  const handleTransformationComplete = (songId: string) => {
+    setTransformationModal(false);
+    toast.success('Vision created! Redirecting...');
+
+    // Navigate to explore page where latest vision will be visible
+    setTimeout(() => {
+      router.push('/explore');
+    }, 500);
   };
 
   const handleStartTransforming = async () => {
@@ -290,34 +302,6 @@ export default function HomePage() {
           </motion.div>
         </section>
 
-        {/* Stats Section */}
-        <section className="relative z-10 py-20 px-4">
-          <motion.div
-            variants={containerVariants}
-            initial="hidden"
-            whileInView="visible"
-            viewport={{ once: true, margin: '-100px' }}
-            className="max-w-4xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-8"
-          >
-            {[
-              { number: '10K+', label: 'Visions Created' },
-              { number: '50K+', label: 'Worlds Explored' },
-              { number: '24/7', label: 'Always Available' },
-            ].map((stat, idx) => (
-              <motion.div
-                key={idx}
-                variants={itemVariants}
-                className="text-center p-6 rounded-xl bg-gradient-to-br from-white/5 to-white/0 border border-white/10 backdrop-blur-xl"
-              >
-                <div className="text-4xl font-bold bg-gradient-to-r from-cyan-400 to-purple-600 bg-clip-text text-transparent mb-2">
-                  {stat.number}
-                </div>
-                <div className="text-white/60">{stat.label}</div>
-              </motion.div>
-            ))}
-          </motion.div>
-        </section>
-
         {/* CTA Section */}
         <section className="relative z-10 py-20 px-4 mb-10">
           <motion.div
@@ -351,6 +335,14 @@ export default function HomePage() {
         isOpen={uploadModal}
         onClose={() => setUploadModal(false)}
         onSubmit={handleUpload}
+      />
+
+      {/* Transformation Loading Modal */}
+      <TransformationLoadingModal
+        isOpen={transformationModal}
+        taskId={taskId}
+        songTitle={songTitle}
+        onComplete={handleTransformationComplete}
       />
     </div>
   );

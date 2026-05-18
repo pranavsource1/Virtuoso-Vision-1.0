@@ -4,7 +4,7 @@ import json
 import os
 import subprocess
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Tuple
 
 from app.config import get_settings
 from app.ml.mood_classifier import mood_classifier
@@ -82,23 +82,28 @@ def process_song_pipeline(self, song_id: str, audio_url: str, user_id: str):
         run_async(mongodb_service.update_song(song_id, {"transcriptionStatus": "processing"}))
 
         print("Step 1: Downloading audio...")
-        audio_path = download_audio_sync(audio_url, song_id)
-        if not audio_path:
+        self.update_state(state='PROGRESS', meta={'current_stage': 0, 'progress': 15})
+        result = download_audio_sync(audio_url, song_id)
+        if not result:
             raise PermanentPipelineError("Failed to download an audio stream from the submitted URL")
 
+        audio_path, thumbnail_url = result
         audio_public_url = public_media_url(audio_path)
         audio_duration = get_audio_duration(audio_path)
 
         print("Step 2: Transcribing audio...")
+        self.update_state(state='PROGRESS', meta={'current_stage': 1, 'progress': 35})
         whisper_service = WhisperService()
         lyrics_segments, full_lyrics = run_async(whisper_service.transcribe_audio(audio_path))
         if not full_lyrics:
             raise Exception("Transcription failed")
 
         print("Step 3: Classifying mood...")
+        self.update_state(state='PROGRESS', meta={'current_stage': 2, 'progress': 50})
         mood = run_async(mood_classifier.classify_mood(full_lyrics))
 
         print("Step 4: Generating visual prompt with local Ollama...")
+        self.update_state(state='PROGRESS', meta={'current_stage': 3, 'progress': 70})
         visual_prompt = run_async(
             ollama_service.generate_visual_prompt(full_lyrics[:500], mood.value)
         )
@@ -106,6 +111,7 @@ def process_song_pipeline(self, song_id: str, audio_url: str, user_id: str):
             visual_prompt = "A dynamic, colorful 3D landscape that shifts with the rhythm."
 
         print("Step 5: Generating scene parameters with local Ollama...")
+        self.update_state(state='PROGRESS', meta={'current_stage': 4, 'progress': 85})
         scene_params = run_async(
             ollama_service.generate_scene_parameters(mood.value, visual_prompt, "", "")
         )
@@ -113,6 +119,7 @@ def process_song_pipeline(self, song_id: str, audio_url: str, user_id: str):
             scene_params = SceneParameters()
 
         print("Updating song in database...")
+        self.update_state(state='PROGRESS', meta={'current_stage': 4, 'progress': 95})
         update_data = {
             "lyrics": [seg.dict() for seg in lyrics_segments],
             "mood": mood.value,
@@ -120,6 +127,7 @@ def process_song_pipeline(self, song_id: str, audio_url: str, user_id: str):
             "visualDescription": visual_prompt,
             "sceneParameters": scene_params.dict(),
             "audioUrl": audio_public_url,
+            "thumbnailUrl": thumbnail_url,
             "duration": audio_duration,
             "transcriptionStatus": "completed",
             "updatedAt": datetime.utcnow(),
@@ -138,7 +146,7 @@ def process_song_pipeline(self, song_id: str, audio_url: str, user_id: str):
                 userId=user_id,
                 songId=song_id,
                 name=song.title,
-                thumbnail=None,
+                thumbnail=thumbnail_url,
                 playCount=0,
                 favorited=False,
                 mood=mood.value if mood else MoodEnum.CALM.value,
@@ -149,7 +157,7 @@ def process_song_pipeline(self, song_id: str, audio_url: str, user_id: str):
         print("Song processing complete")
         send_completion_notification.delay(song_id, user_id)
 
-        return {"status": "completed", "song_id": song_id}
+        return {"status": "completed", "songId": song_id}
 
     except Exception as exc:
         print(f"Pipeline failed: {exc}")
@@ -169,8 +177,8 @@ def process_song_pipeline(self, song_id: str, audio_url: str, user_id: str):
         raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
 
 
-def download_audio_sync(audio_url: str, song_id: str) -> Optional[str]:
-    """Download an audio stream from a URL and return a local audio file path."""
+def download_audio_sync(audio_url: str, song_id: str) -> Optional[Tuple[str, str]]:
+    """Download an audio stream from a URL and extract thumbnail. Returns (audio_path, thumbnail_url)."""
     try:
         import yt_dlp
 
@@ -180,6 +188,7 @@ def download_audio_sync(audio_url: str, song_id: str) -> Optional[str]:
 
         base_path = os.path.join(media_dir, song_id)
         output_path = f"{base_path}.mp3"
+        thumbnail_path = f"{base_path}.jpg"
         audio_extensions = {".aac", ".flac", ".m4a", ".mp3", ".oga", ".ogg", ".opus", ".wav", ".webm"}
 
         for file_path in glob.glob(f"{base_path}*"):
@@ -203,6 +212,7 @@ def download_audio_sync(audio_url: str, song_id: str) -> Optional[str]:
             "overwrites": True,
             "quiet": False,
             "no_warnings": False,
+            "writethumbnail": True,
             "extractor_args": {
                 "youtube": {
                     "player_client": ["mweb", "web"],
@@ -214,12 +224,18 @@ def download_audio_sync(audio_url: str, song_id: str) -> Optional[str]:
             "ignoreerrors": False,
         }
 
+        thumbnail_url = ""
+
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([audio_url])
+            info = ydl.extract_info(audio_url, download=True)
+            # Get thumbnail URL from extracted info
+            if info and "thumbnail" in info:
+                thumbnail_url = info["thumbnail"]
+                print(f"Extracted thumbnail URL: {thumbnail_url}")
 
         if os.path.exists(output_path):
             print(f"Audio downloaded to {output_path}")
-            return output_path
+            return (output_path, thumbnail_url)
 
         matches = [
             path
@@ -228,7 +244,7 @@ def download_audio_sync(audio_url: str, song_id: str) -> Optional[str]:
         ]
         if matches:
             print(f"Expected mp3 not found, using audio fallback: {matches[0]}")
-            return matches[0]
+            return (matches[0], thumbnail_url)
 
         print(f"No audio output file found at {base_path}.*")
         return None

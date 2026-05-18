@@ -2,8 +2,8 @@
 
 import React, { useEffect, useState } from 'react';
 import { NavBar } from '@/components/ui';
-import { motion } from 'framer-motion';
-import { Search, Heart, Play, Music, Flame, Clock, Grid, List, Loader } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Search, Heart, Play, Music, Flame, Clock, Grid, List, Loader, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { getAuthToken } from '@/lib/api';
 
@@ -27,9 +27,19 @@ export default function ExplorePage() {
   const [sortBy, setSortBy] = useState<SortOption>('newest');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [creatingData, setCreatingData] = useState(false);
+  const [newVisionIds, setNewVisionIds] = useState<Set<string>>(new Set());
+  const [previousVisionCount, setPreviousVisionCount] = useState(0);
+  const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; name: string } | null>(null);
 
   useEffect(() => {
     fetchVisions();
+
+    // Poll for new visions every 3 seconds when page is open
+    const pollInterval = setInterval(() => {
+      fetchVisions();
+    }, 3000);
+
+    return () => clearInterval(pollInterval);
   }, []);
 
   useEffect(() => {
@@ -52,11 +62,32 @@ export default function ExplorePage() {
 
       if (response.ok) {
         const data = await response.json();
-        setVisions(data.visions || []);
+        const newVisions = data.visions || [];
+
+        // Detect new visions
+        if (previousVisionCount > 0 && newVisions.length > previousVisionCount) {
+          const newCount = newVisions.length - previousVisionCount;
+          const newIds = new Set<string>(newVisions.slice(0, newCount).map((v: Vision) => v.id));
+          setNewVisionIds(newIds);
+
+          // Show toast notification
+          toast.success(`🎨 ${newCount} new vision${newCount > 1 ? 's' : ''} created!`);
+
+          // Auto-remove "new" badge after 5 seconds
+          setTimeout(() => {
+            setNewVisionIds(new Set());
+          }, 5000);
+        }
+
+        setVisions(newVisions);
+        setPreviousVisionCount(newVisions.length);
       }
     } catch (error) {
       console.error('Failed to fetch visions:', error);
-      toast.error('Failed to load visions');
+      // Don't show error toast on poll - only on initial load
+      if (previousVisionCount === 0) {
+        toast.error('Failed to load visions');
+      }
     } finally {
       setLoading(false);
     }
@@ -188,6 +219,50 @@ export default function ExplorePage() {
       console.error('Failed to update favorite:', error);
       toast.error('Failed to update favorite');
     }
+  };
+
+  const handleDeleteVision = async (visionId: string) => {
+    try {
+      const token = await getAuthToken();
+      if (!token) {
+        toast.error('Please log in');
+        return;
+      }
+
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/visions/${visionId}`, {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        setVisions((prev) => prev.filter((v) => v.id !== visionId));
+        toast.success('Vision deleted');
+        setDeleteConfirm(null);
+      } else {
+        toast.error('Failed to delete vision');
+      }
+    } catch (error) {
+      console.error('Failed to delete vision:', error);
+      toast.error('Failed to delete vision');
+    }
+  };
+
+  const getMoodGradient = (mood?: string): string => {
+    const moodMap: Record<string, string> = {
+      'energetic': 'from-orange-500/30 via-red-500/20 to-yellow-500/30',
+      'happy': 'from-yellow-500/30 via-orange-500/20 to-pink-500/30',
+      'calm': 'from-blue-500/30 via-cyan-500/20 to-teal-500/30',
+      'sad': 'from-indigo-500/30 via-blue-500/20 to-slate-500/30',
+      'angry': 'from-red-600/30 via-orange-600/20 to-yellow-600/30',
+      'romantic': 'from-pink-500/30 via-rose-500/20 to-red-500/30',
+      'melancholic': 'from-purple-500/30 via-indigo-500/20 to-blue-500/30',
+      'mysterious': 'from-purple-700/30 via-indigo-700/20 to-black/30',
+      'peaceful': 'from-green-500/30 via-emerald-500/20 to-cyan-500/30',
+      'dark': 'from-slate-700/40 via-black/30 to-slate-900/40',
+    };
+    return moodMap[mood?.toLowerCase() || ''] || 'from-cyan-500/20 to-purple-600/20';
   };
 
   const containerVariants = {
@@ -327,12 +402,26 @@ export default function ExplorePage() {
                 {viewMode === 'grid' ? (
                   // Grid View Card
                   <div className="relative h-64 bg-gradient-to-br from-white/5 to-white/0 rounded-xl overflow-hidden border border-white/10 group-hover:border-cyan-500/50 transition-all shadow-xl">
-                    {vision.thumbnail && (
+                    {/* NEW badge */}
+                    {newVisionIds.has(vision.id) && (
+                      <motion.div
+                        initial={{ scale: 0, rotate: -180 }}
+                        animate={{ scale: 1, rotate: 0 }}
+                        className="absolute top-3 left-3 z-20 px-3 py-1 bg-gradient-to-r from-cyan-500 to-purple-600 rounded-full text-xs font-bold text-white shadow-lg"
+                      >
+                        ✨ NEW
+                      </motion.div>
+                    )}
+                    {vision.thumbnail ? (
                       <img
                         src={vision.thumbnail}
                         alt={vision.name}
                         className="w-full h-full object-cover"
                       />
+                    ) : (
+                      <div className={`w-full h-full bg-gradient-to-br ${getMoodGradient(vision.mood)} flex items-center justify-center`}>
+                        <Music size={48} className="text-white/50" />
+                      </div>
                     )}
 
                     {/* Gradient overlay */}
@@ -375,6 +464,17 @@ export default function ExplorePage() {
                             <Heart size={18} className="text-white/60" />
                           )}
                         </motion.button>
+                        <motion.button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDeleteConfirm({ id: vision.id, name: vision.name });
+                          }}
+                          whileHover={{ scale: 1.1 }}
+                          whileTap={{ scale: 0.9 }}
+                          className="px-4 py-2 bg-red-500/20 rounded-lg text-red-400 hover:bg-red-500/40 transition-all"
+                        >
+                          <Trash2 size={18} />
+                        </motion.button>
                       </div>
                     </div>
 
@@ -393,7 +493,17 @@ export default function ExplorePage() {
                   </div>
                 ) : (
                   // List View Card
-                  <div className="flex items-center gap-4 p-4 bg-gradient-to-br from-white/5 to-white/0 border border-white/10 rounded-xl hover:border-cyan-500/50 transition-all group cursor-pointer">
+                  <div className="flex items-center gap-4 p-4 bg-gradient-to-br from-white/5 to-white/0 border border-white/10 rounded-xl hover:border-cyan-500/50 transition-all group cursor-pointer relative">
+                    {/* NEW badge for list view */}
+                    {newVisionIds.has(vision.id) && (
+                      <motion.div
+                        initial={{ scale: 0, rotate: -180 }}
+                        animate={{ scale: 1, rotate: 0 }}
+                        className="absolute -top-2 -right-2 px-2 py-1 bg-gradient-to-r from-cyan-500 to-purple-600 rounded-full text-xs font-bold text-white shadow-lg"
+                      >
+                        ✨
+                      </motion.div>
+                    )}
                     {/* Thumbnail */}
                     <div className="w-24 h-24 rounded-lg overflow-hidden flex-shrink-0 bg-gradient-to-br from-cyan-500/20 to-purple-600/20">
                       {vision.thumbnail ? (
@@ -403,8 +513,8 @@ export default function ExplorePage() {
                           className="w-full h-full object-cover"
                         />
                       ) : (
-                        <div className="w-full h-full flex items-center justify-center">
-                          <Music size={32} className="text-white/30" />
+                        <div className={`w-full h-full bg-gradient-to-br ${getMoodGradient(vision.mood)} flex items-center justify-center`}>
+                          <Music size={32} className="text-white/50" />
                         </div>
                       )}
                     </div>
@@ -446,6 +556,14 @@ export default function ExplorePage() {
                       >
                         <Play size={14} />
                         Play
+                      </motion.button>
+                      <motion.button
+                        onClick={() => setDeleteConfirm({ id: vision.id, name: vision.name })}
+                        whileHover={{ scale: 1.1 }}
+                        whileTap={{ scale: 0.9 }}
+                        className="px-3 py-2 bg-red-500/20 rounded-lg text-red-400 hover:bg-red-500/40 transition-all"
+                      >
+                        <Trash2 size={18} />
                       </motion.button>
                     </div>
                   </div>
@@ -495,6 +613,58 @@ export default function ExplorePage() {
             </div>
           </motion.div>
         )}
+
+        {/* Delete Confirmation Modal */}
+        <AnimatePresence>
+          {deleteConfirm && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setDeleteConfirm(null)}
+              className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xl flex items-center justify-center p-4"
+            >
+              <motion.div
+                initial={{ scale: 0.8, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.8, opacity: 0 }}
+                onClick={(e) => e.stopPropagation()}
+                className="bg-gradient-to-br from-white/10 via-white/5 to-transparent backdrop-blur-xl border border-white/20 rounded-2xl p-8 max-w-md w-full shadow-2xl"
+              >
+                <div className="flex items-center justify-center mb-6">
+                  <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center">
+                    <Trash2 size={32} className="text-red-400" />
+                  </div>
+                </div>
+
+                <h3 className="text-2xl font-bold text-white text-center mb-2">Delete Vision?</h3>
+                <p className="text-white/60 text-center mb-6">
+                  Are you sure you want to delete <span className="text-white font-semibold">"{deleteConfirm.name}"</span>? This action cannot be undone.
+                </p>
+
+                <div className="flex gap-3">
+                  <motion.button
+                    onClick={() => setDeleteConfirm(null)}
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                    className="flex-1 px-4 py-3 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg text-white font-semibold transition-all"
+                  >
+                    Cancel
+                  </motion.button>
+                  <motion.button
+                    onClick={() => handleDeleteVision(deleteConfirm.id)}
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                    className="flex-1 px-4 py-3 bg-red-500 hover:bg-red-600 rounded-lg text-white font-semibold transition-all flex items-center justify-center gap-2"
+                  >
+                    <Trash2 size={18} />
+                    Delete
+                  </motion.button>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </main>
     </div>
   );

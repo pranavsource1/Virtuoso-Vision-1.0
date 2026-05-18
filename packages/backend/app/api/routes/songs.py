@@ -54,37 +54,6 @@ async def create_song(song_data: SongCreate, authorization: str = Header(None)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/{song_id}", response_model=SongResponse)
-async def get_song(song_id: str, authorization: str = Header(None)):
-    """Get song by ID"""
-    try:
-        user_id = await get_current_user(authorization)
-        song = await mongodb_service.get_song(song_id)
-
-        if not song:
-            raise HTTPException(status_code=404, detail="Song not found")
-
-        if song.userId != user_id:
-            raise HTTPException(status_code=403, detail="Unauthorized")
-
-        return SongResponse(
-            id=song.id,
-            title=song.title,
-            artist=song.artist,
-            mood=song.mood.value,
-            lyrics=song.lyrics,
-            sceneParameters=song.sceneParameters,
-            visualDescription=song.visualDescription or "",
-            audioUrl=song.audioUrl,
-            duration=song.duration,
-            createdAt=song.createdAt.isoformat(),
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @router.get("/user/all")
 async def get_user_songs(limit: int = 50, offset: int = 0, authorization: str = Header(None)):
     """Get all songs for current user"""
@@ -110,6 +79,67 @@ async def get_user_songs(limit: int = 50, offset: int = 0, authorization: str = 
             ],
             "count": len(songs),
         }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/task/{task_id}/status")
+async def get_task_status(task_id: str, authorization: str = Header(None)):
+    """Get the status of a song processing task"""
+    try:
+        user_id = await get_current_user(authorization)
+
+        # Import Celery app to check task status
+        from app.workers.tasks import process_song_pipeline
+        task = process_song_pipeline.AsyncResult(task_id)
+
+        status = task.state
+
+        # Get progress data during PROGRESS state, or final result on SUCCESS
+        if status == 'PROGRESS':
+            result = task.info
+        elif status == 'SUCCESS':
+            result = task.result
+        else:
+            result = None
+
+        return {
+            "taskId": task_id,
+            "status": status,  # PENDING, STARTED, PROGRESS, SUCCESS, FAILURE, RETRY
+            "result": result,
+            "error": str(task.info) if status == 'FAILURE' else None
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{song_id}", response_model=SongResponse)
+async def get_song(song_id: str, authorization: str = Header(None)):
+    """Get song by ID"""
+    try:
+        user_id = await get_current_user(authorization)
+        song = await mongodb_service.get_song(song_id)
+
+        if not song:
+            raise HTTPException(status_code=404, detail="Song not found")
+
+        if song.userId != user_id:
+            raise HTTPException(status_code=403, detail="Unauthorized")
+
+        return SongResponse(
+            id=song.id,
+            title=song.title,
+            artist=song.artist,
+            mood=song.mood.value,
+            lyrics=song.lyrics,
+            sceneParameters=song.sceneParameters,
+            visualDescription=song.visualDescription or "",
+            audioUrl=song.audioUrl,
+            duration=song.duration,
+            createdAt=song.createdAt.isoformat(),
+        )
     except HTTPException:
         raise
     except Exception as e:

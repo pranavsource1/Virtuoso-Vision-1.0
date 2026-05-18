@@ -90,7 +90,22 @@ export default function VisionPage() {
       }
     };
 
-    if (visionId) fetchData();
+    if (visionId) {
+      fetchData();
+
+      // Set up polling for real-time updates (check every 2 seconds)
+      const pollInterval = setInterval(fetchData, 2000);
+
+      // Stop polling if vision successfully loads (after 30 seconds)
+      const timeout = setTimeout(() => {
+        clearInterval(pollInterval);
+      }, 30000);
+
+      return () => {
+        clearInterval(pollInterval);
+        clearTimeout(timeout);
+      };
+    }
   }, [visionId, setCurrentVision, setCurrentSong, setSceneParameters]);
 
   // Handle audio playback

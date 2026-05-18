@@ -99,6 +99,7 @@ class SongDB(BaseModel):
     artist: Optional[str] = None
     songUrl: str
     audioUrl: str  # Downloaded/converted audio file URL or path
+    thumbnailUrl: Optional[str] = None  # YouTube thumbnail or extracted image
     lyrics: List[LyricSegment] = []
     mood: MoodEnum
     audioFeatures: AudioFeatures
