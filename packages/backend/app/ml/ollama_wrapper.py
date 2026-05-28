@@ -72,15 +72,18 @@ class OllamaService:
             return None
 
     async def generate_scene_parameters(
-        self, mood: str, visual_description: str, song_title: str, artist: str
+        self, mood: str, visual_description: str, song_title: str, artist: str, vibe_prompt: str = ""
     ) -> Optional[SceneParameters]:
         """Generate a unique mathematical fingerprint for this specific song."""
+
+        vibe_instruction = f'IMPORTANT - The user has specifically requested this vibe: "{vibe_prompt}"\nYou MUST let this vision heavily influence your choices for mood, colors, terrain, water, structures, and sky.' if vibe_prompt else ''
 
         prompt = f"""You are a synesthete — someone who literally SEES music as shapes, colors, and movement.
 
 You are listening to "{song_title}" by {artist}.
 The mood is: {mood}
 The visual world you see: {visual_description}
+{vibe_instruction}
 
 Your task: Convert what you see and feel into EXACT mathematical parameters that will drive a procedural 3D world. Every number you choose makes the visualization unique to THIS specific song.
 
@@ -120,7 +123,11 @@ Return ONLY valid JSON with these fields (all floats between 0.0 and 1.0 unless 
   "cameraDistance": 0.5,
   "cameraHeight": 0.5,
   "bassReactivity": 0.6,
-  "trebleReactivity": 0.4
+  "trebleReactivity": 0.4,
+  "terrainStyle": "mountains",
+  "waterType": "calm_lake",
+  "structureType": "monoliths",
+  "skyAtmosphere": "starry_space"
 }}
 
 GUIDANCE (think deeply about the song before choosing):
@@ -139,6 +146,12 @@ GUIDANCE (think deeply about the song before choosing):
 - emissiveStrength: Energetic/bright → 0.7-1.0. Dark/subdued → 0.1-0.3.
 - bassReactivity: Bass-heavy genres (trap, EDM) → 0.8-1.0. Vocal-focused → 0.2-0.4.
 - trebleReactivity: Bright instruments (synths, hi-hats) → 0.7-1.0. Deep/bass-only → 0.1-0.3.
+
+STYLES:
+- terrainStyle: one of ["mountains", "flatlands", "canyons", "floating_islands"]
+- waterType: one of ["calm_lake", "lava", "stormy_ocean", "digital_grid", "none"]
+- structureType: one of ["crystals", "monoliths", "ruins", "neon_pillars", "none"]
+- skyAtmosphere: one of ["starry_space", "sunset", "dark_abyss", "aurora"]
 
 COLORS: Choose 5 colors that capture the SPECIFIC emotional palette of THIS song.
 - NOT generic mood colors. Think: what exact colors flash in your mind when you hear these lyrics?
@@ -186,6 +199,23 @@ Return ONLY the JSON. No explanation."""
                 params["geometryScale"] = max(0.3, min(3.0, float(params["geometryScale"])))
             if "particleGravity" in params:
                 params["particleGravity"] = max(-1.0, min(1.0, float(params["particleGravity"])))
+
+            # Validate string styles
+            valid_terrain = ["mountains", "flatlands", "canyons", "floating_islands"]
+            if params.get('terrainStyle') not in valid_terrain:
+                params['terrainStyle'] = "mountains"
+            
+            valid_water = ["calm_lake", "lava", "stormy_ocean", "digital_grid", "none"]
+            if params.get('waterType') not in valid_water:
+                params['waterType'] = "calm_lake"
+            
+            valid_structure = ["crystals", "monoliths", "ruins", "neon_pillars", "none"]
+            if params.get('structureType') not in valid_structure:
+                params['structureType'] = "monoliths"
+            
+            valid_sky = ["starry_space", "sunset", "dark_abyss", "aurora"]
+            if params.get('skyAtmosphere') not in valid_sky:
+                params['skyAtmosphere'] = "starry_space"
 
             return SceneParameters(**params)
         except Exception as e:

@@ -31,6 +31,10 @@ interface SceneParameters {
   cameraHeight?: number;
   bassReactivity?: number;
   trebleReactivity?: number;
+  terrainStyle?: string;
+  waterType?: string;
+  structureType?: string;
+  skyAtmosphere?: string;
 }
 
 interface Vision {

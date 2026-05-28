@@ -10,20 +10,26 @@
 
 ---
 
-## ✨ What It Does
+## ✨ Mind-Bending Capabilities
 
-Upload a song URL → VirtuosoVision downloads the audio, transcribes the lyrics with Whisper, classifies the mood, and uses a **local Ollama LLM** to generate a mathematical fingerprint of 30+ parameters. Those parameters drive a **real-time GLSL fragment shader** that renders a one-of-a-kind audio-reactive world at 60 FPS — no two songs ever look the same.
+Upload a song URL → VirtuosoVision summons the raw auditory soul of the music, transcribes every breath with Whisper, and unleashes a **local Ollama LLM** to hallucinate a breathtaking, hyper-vivid reality. The AI weaves a deep, cinematic lore and a cryptographic mathematical fingerprint of 30+ dimensional parameters. These parameters inject pure adrenaline into a **real-time GLSL fragment shader** and a galaxy of massive, audio-reactive particle systems, forging a completely unique, face-melting 3D world at a blistering 60 FPS. You can even tear through the fabric of this generated universe in first-person (FPS mode)!
 
 ---
 
 ## 🎨 Core Features
 
-### Procedural Shader Engine
-- **Full-screen GLSL fragment shader** — every pixel is computed on the GPU in real-time
-- **30+ tunable parameters** — geometry complexity, distortion, sharpness, symmetry, terrain, particles, fog, glow, rotation, pulse, and more
-- **Layered composition** — aurora/nebula background → primary pattern (FBM noise + Voronoi cells) → shader-drawn particles → volumetric light rays → audio-reactive pulse rings
-- **Kaleidoscope symmetry** — automatic radial symmetry when the `symmetry` parameter is high
-- **Domain warping** — Simplex noise-driven UV distortion for organic, flowing visuals
+### 🌌 God-Tier Procedural 3D Engine
+- **Face-Melting GLSL Fragment Shader** — Every single pixel is mathematically annihilated and reborn on your GPU in real-time.
+- **30+ God-Mode Parameters** — Command reality itself: bend geometry, shatter dimensions, summon fog, ignite ethereal glows, and manipulate gravity.
+- **Galactic Particle Storms** — Thousands of hyper-glowing fireflies and ambient celestial dust motes that violently swell and accelerate to the sheer kinetic force of the beat.
+- **FPS Dimension Drifting** — Break the fourth wall. Pointer-lock controls (W/A/S/D/Shift/Space) let you fly through the neon guts of your own generated universe at warp speed.
+- **Omni-Layered Composition** — Aurora/nebula skies → reality-bending FBM noise + Voronoi cells → GPU-sculpted terrain → blinding volumetric god rays.
+- **Domain Warping** — Simplex noise-driven UV distortion that rips apart space to create organic, hallucinatory visuals.
+
+### 🎭 Cinematic HUD & Reality-Bending Lore
+- **Generative World Lore** — A localized AI hivemind hallucinates a custom, chillingly accurate cinematic history for the dimension it just spawned.
+- **Hyper-Reactive Lyric HUD** — Lyrics don't just appear; they materialize as a breathtaking, glassmorphic cinematic overlay that drifts through the void and violently pulses with the bass frequencies, making you feel the words in your bones.
+- **Omniscient Insight Panel** — Peek directly into the brain of the AI: view its visual interpretation, hexadecimal soul palette, and psycho-acoustic mood classification in real-time.
 
 ### Audio Reactivity
 - **Web Audio API → FFT → Shader** — real-time bass, mid, and treble energy extracted via `AnalyserNode`
@@ -34,7 +40,7 @@ Upload a song URL → VirtuosoVision downloads the audio, transcribes the lyrics
 ### AI-Powered Pipeline
 - **OpenAI Whisper** — speech-to-text with timestamped lyric segments
 - **HuggingFace Transformers** — local emotion/mood classification (happy, sad, energetic, calm, melancholic, ethereal, dark, uplifting)
-- **Ollama (Mistral)** — generates vivid scene descriptions and structured JSON scene parameters from lyrics + mood
+- **Ollama (Mistral)** — generates vivid scene descriptions, structured JSON scene parameters, and creative world "lore" from lyrics + mood
 - **Deterministic fallback** — if Ollama is unavailable, a hash-based generator produces unique-per-song defaults
 
 ### Production Infrastructure
@@ -219,11 +225,11 @@ User submits a song URL
 [3] Classify mood from lyrics (HuggingFace Transformers)
     │
     ▼
-[4] Generate vivid visual description (Ollama Mistral, temp=0.9)
-    │       "Obsidian cliffs rise from a sea of liquid chrome..."
+[4] Generate vivid visual description & World Lore (Ollama Mistral, temp=0.9)
+    │       "Obsidian cliffs rise from a sea of liquid chrome... This is the graveyard of a forgotten civilization."
     ▼
 [5] Generate 30+ scene parameters as structured JSON (Ollama Mistral, temp=0.4)
-    │       { colors: {c1:"#06B6D4",...}, geometryComplexity: 0.7, ... }
+    │       { colors: {c1:"#06B6D4",...}, geometryComplexity: 0.7, particleDensity: 0.8... }
     ▼
 [6] Store song + vision in MongoDB, embeddings in Supabase pgvector
     │

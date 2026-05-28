@@ -3,16 +3,22 @@ import glob
 import json
 import os
 import subprocess
+import tempfile
 from datetime import datetime
 from typing import Optional, Tuple
 
 from app.config import get_settings
 from app.ml.mood_classifier import mood_classifier
-from app.ml.ollama_wrapper import ollama_service
+from app.ml.ollama_wrapper import ollama_service as lyric_ollama_service
 from app.ml.whisper_wrapper import WhisperService
 from app.models import AudioFeatures, MoodEnum, SceneParameters
 from app.services.mongodb_service import mongodb_service
 from app.services.supabase_service import supabase_service
+from app.services.local_storage_service import local_storage_service
+from app.services.music_service import music_service
+from app.services.ollama_service import ollama_service as world_ollama_service
+from app.services.triposr_service import triposr_service
+from app.services.hunyuan_world_service import hunyuan_world_service
 from app.workers.celery_app import app
 
 
@@ -66,7 +72,7 @@ def get_audio_duration(audio_path: str) -> float:
 
 
 @app.task(bind=True, max_retries=3)
-def process_song_pipeline(self, song_id: str, audio_url: str, user_id: str):
+def process_song_pipeline(self, song_id: str, audio_url: str, user_id: str, vibe_prompt: str = ""):
     """
     Main pipeline:
     1. Download audio
@@ -105,7 +111,7 @@ def process_song_pipeline(self, song_id: str, audio_url: str, user_id: str):
         print("Step 4: Generating visual prompt with local Ollama...")
         self.update_state(state='PROGRESS', meta={'current_stage': 3, 'progress': 70})
         visual_prompt = run_async(
-            ollama_service.generate_visual_prompt(full_lyrics[:500], mood.value)
+            lyric_ollama_service.generate_visual_prompt(full_lyrics[:500], mood.value)
         )
         if not visual_prompt:
             visual_prompt = "A dynamic, colorful 3D landscape that shifts with the rhythm."
@@ -113,7 +119,7 @@ def process_song_pipeline(self, song_id: str, audio_url: str, user_id: str):
         print("Step 5: Generating scene parameters with local Ollama...")
         self.update_state(state='PROGRESS', meta={'current_stage': 4, 'progress': 85})
         scene_params = run_async(
-            ollama_service.generate_scene_parameters(mood.value, visual_prompt, "", "")
+            lyric_ollama_service.generate_scene_parameters(mood.value, visual_prompt, "", "", vibe_prompt)
         )
         if not scene_params:
             scene_params = SceneParameters()
@@ -292,3 +298,281 @@ def send_completion_notification(song_id: str, user_id: str):
         print(f"Notification sent for song {song_id}")
     except Exception as exc:
         print(f"Notification failed: {exc}")
+
+
+# ===========================
+# LOCAL MUSIC WORLD GENERATION
+# ===========================
+
+async def _update_generation_task(task_id: Optional[str], update_data: dict):
+    """Update the MongoDB task document used by the frontend status poller."""
+    if not task_id:
+        return
+
+    collection = await mongodb_service.get_collection("music_world_generation_tasks")
+    update_data["updatedAt"] = datetime.utcnow()
+    await collection.update_one({"_id": task_id}, {"$set": update_data})
+
+
+def _song_mood_value(song) -> str:
+    mood = getattr(song, "mood", "ambient")
+    return getattr(mood, "value", str(mood))
+
+
+def _lyrics_sample(song, max_chars: int = 900) -> str:
+    text = " ".join(segment.text for segment in (song.lyrics or []) if getattr(segment, "text", None))
+    return text[:max_chars]
+
+
+def _scene_colors(song) -> dict:
+    params = getattr(song, "sceneParameters", None)
+    return getattr(params, "colors", {}) if params else {}
+
+
+def _progress(self, task_id: Optional[str], song_id: str, stage: int, progress: int, message: str):
+    print(message)
+    self.update_state(state="PROGRESS", meta={"current_stage": stage, "progress": progress})
+    run_async(_update_generation_task(task_id, {"status": "processing", "progress": progress}))
+    run_async(
+        mongodb_service.update_song(
+            song_id,
+            {
+                "generationStatus": "processing",
+                "generationTaskId": task_id,
+                "generationProgress": progress,
+                "generationError": None,
+            },
+        )
+    )
+
+
+async def _mark_generation_failed(song_id: str, task_id: Optional[str], error: str):
+    await mongodb_service.update_song(
+        song_id,
+        {
+            "generationStatus": "failed",
+            "generationError": error,
+            "updatedAt": datetime.utcnow(),
+        },
+    )
+    await _update_generation_task(task_id, {"status": "failed", "error": error})
+
+
+@app.task(name="app.workers.tasks.generate_music_world", bind=True, max_retries=1)
+def generate_music_world(
+    self,
+    song_id: str,
+    task_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    preferred_3d_service: str = "triposr"  # or "hunyuan_world"
+):
+    """
+    Generate a local 3D world for a song.
+
+    Local-only pipeline (100% FREE and open-source):
+    1. Ollama enhances the song's visual prompt.
+    2. Selected 3D service (TripoSR or HunyuanWorld) generates GLB.
+    3. Fallback to procedural GLB if both services unavailable.
+    4. Local storage serves model/audio files through /media.
+
+    Args:
+        song_id: MongoDB song ID
+        task_id: Generation task tracking ID (for frontend polling)
+        user_id: Owning user ID
+        preferred_3d_service: "triposr" (default) or "hunyuan_world"
+    """
+    if user_id is None:
+        user_id = task_id
+        task_id = self.request.id
+
+    try:
+        _progress(self, task_id, song_id, 0, 8, f"Starting local world generation for song {song_id}")
+
+        song = run_async(mongodb_service.get_song(song_id))
+        if not song:
+            raise Exception(f"Song {song_id} not found")
+        if user_id and song.userId != user_id:
+            raise Exception("Song does not belong to this user")
+
+        mood = _song_mood_value(song)
+        prompt_seed = song.visualDescription or _lyrics_sample(song) or f"{song.title} by {song.artist or 'unknown artist'}"
+
+        _progress(self, task_id, song_id, 1, 24, "Enhancing 3D scene with local Ollama")
+        world_text = run_async(
+            world_ollama_service.generate_world_title_and_description(
+                music_mood=mood,
+                user_prompt=prompt_seed,
+            )
+        )
+        world_title = world_text.get("title") or f"{song.title} World"
+        scene_description = world_text.get("description") or prompt_seed
+        world_lore = world_text.get("lore") or "An ethereal realm born from the echoes of forgotten melodies."
+        scene_description = run_async(world_ollama_service.enhance_scene_description(scene_description))
+
+        run_async(
+            mongodb_service.update_song(
+                song_id,
+                {
+                    "scene3dDescription": scene_description,
+                    "worldLore": world_lore,
+                    "generationProgress": 35,
+                },
+            )
+        )
+        run_async(
+            _update_generation_task(
+                task_id,
+                {
+                    "scene_description": scene_description,
+                    "world_title": world_title,
+                    "world_lore": world_lore,
+                    "progress": 35,
+                    "3d_service": preferred_3d_service,
+                },
+            )
+        )
+
+        _progress(self, task_id, song_id, 2, 48, f"Generating 3D model with {preferred_3d_service}")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            local_model_path = os.path.join(temp_dir, "world.glb")
+            success, model_message = False, "No 3D service available"
+
+            # Try preferred service first
+            if preferred_3d_service == "hunyuan_world":
+                print(f"  Attempting HunyuanWorld...")
+                success, model_message = run_async(
+                    hunyuan_world_service.generate_model_from_prompt(
+                        scene_description=scene_description,
+                        mood=mood,
+                        output_path=local_model_path,
+                        colors=_scene_colors(song),
+                    )
+                )
+                if not success:
+                    print(f"  HunyuanWorld unavailable, falling back to TripoSR: {model_message}")
+
+            # Fallback to TripoSR or try TripoSR if it was the preferred service
+            if not success:
+                print(f"  Using TripoSR...")
+                success, model_message = run_async(
+                    triposr_service.generate_model_from_prompt(
+                        scene_description=scene_description,
+                        mood=mood,
+                        output_path=local_model_path,
+                        colors=_scene_colors(song),
+                    )
+                )
+
+            if not success:
+                raise Exception(model_message)
+
+            _progress(self, task_id, song_id, 3, 74, "Saving generated model locally")
+            stored_model_path = run_async(local_storage_service.save_model(local_model_path, song_id))
+
+        if not stored_model_path:
+            raise Exception("Local model storage failed")
+
+        model_url = run_async(local_storage_service.get_public_url(stored_model_path))
+
+        _progress(self, task_id, song_id, 4, 88, "Creating local ambient audio")
+        generated_music_url = run_async(
+            music_service.generate_ambient_music(
+                song_id=song_id,
+                scene_description=scene_description,
+                mood=mood,
+            )
+        )
+
+        update_data = {
+            "generationStatus": "succeeded",
+            "generationProgress": 100,
+            "modelUrl": model_url,
+            "splatUrl": None,
+            "generatedMusicUrl": generated_music_url or song.audioUrl,
+            "scene3dDescription": scene_description,
+            "worldLore": world_lore,
+            "generatedAt": datetime.utcnow(),
+            "updatedAt": datetime.utcnow(),
+        }
+        run_async(mongodb_service.update_song(song_id, update_data))
+        run_async(
+            _update_generation_task(
+                task_id,
+                {
+                    "status": "succeeded",
+                    "progress": 100,
+                    "model_url": model_url,
+                    "splat_url": None,
+                    "music_url": generated_music_url or song.audioUrl,
+                    "scene_description": scene_description,
+                    "world_title": world_title,
+                    "world_lore": world_lore,
+                    "error": None,
+                },
+            )
+        )
+
+        print(f"✅ Local music world generation complete for {song_id}: {model_url}")
+        return {
+            "status": "succeeded",
+            "song_id": song_id,
+            "task_id": task_id,
+            "model_url": model_url,
+            "music_url": generated_music_url or song.audioUrl,
+        }
+
+    except Exception as exc:
+        error = str(exc)
+        print(f"Local music world generation failed: {error}")
+        run_async(_mark_generation_failed(song_id, task_id, error))
+
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=exc, countdown=45)
+        return {"status": "failed", "song_id": song_id, "task_id": task_id, "error": error}
+
+
+@app.task(bind=True, max_retries=1)
+def generate_model_from_uploaded_image(
+    self,
+    task_id: str,
+    image_path: str,
+    song_id: str,
+    user_id: str,
+):
+    """Generate a local model directly from an uploaded image."""
+    try:
+        run_async(_update_generation_task(task_id, {"status": "processing", "progress": 15}))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            local_model_path = os.path.join(temp_dir, "uploaded-world.glb")
+            success, message = run_async(
+                triposr_service.generate_model_from_image(
+                    image_path=image_path,
+                    output_path=local_model_path,
+                    fallback_seed=f"{task_id}:{song_id}",
+                )
+            )
+            if not success:
+                raise Exception(message)
+
+            stored_model_path = run_async(local_storage_service.save_model(local_model_path, song_id))
+
+        model_url = run_async(local_storage_service.get_public_url(stored_model_path))
+        run_async(
+            _update_generation_task(
+                task_id,
+                {
+                    "status": "succeeded",
+                    "progress": 100,
+                    "model_url": model_url,
+                    "error": None,
+                },
+            )
+        )
+        return {"status": "succeeded", "task_id": task_id, "model_url": model_url}
+    except Exception as exc:
+        error = str(exc)
+        run_async(_update_generation_task(task_id, {"status": "failed", "error": error}))
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=exc, countdown=30)
+        return {"status": "failed", "task_id": task_id, "error": error}

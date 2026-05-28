@@ -8,7 +8,7 @@ import { useVisionStore } from '@/lib/vision-store';
 import { useAudioStore } from '@/lib/audio-store';
 import { Play, Pause, Volume2, Heart, Share2, ArrowLeft, BookOpen, Settings, Loader, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
-import { getVision as fetchVisionAPI, getSong as fetchSongAPI, getAuthToken } from '@/lib/api';
+import { getVision as fetchVisionAPI, getSong as fetchSongAPI, getAuthToken, startMusicWorldGeneration } from '@/lib/api';
 
 interface Vision {
   id: string;
@@ -31,6 +31,14 @@ interface Song {
   audioUrl: string;
   duration: number;
   createdAt: string;
+  modelUrl?: string | null;
+  splatUrl?: string | null;
+  generatedMusicUrl?: string | null;
+  scene3dDescription?: string | null;
+  generationTaskId?: string | null;
+  generationStatus?: 'pending' | 'processing' | 'succeeded' | 'failed';
+  generationError?: string | null;
+  worldLore?: string | null;
 }
 
 export default function VisionPage() {
@@ -44,7 +52,7 @@ export default function VisionPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [isPlaying, setIsPlaying] = useState(false);
-  const [currentLyricIndex, setCurrentLyricIndex] = useState(0);
+  const [currentLyricIndex, setCurrentLyricIndex] = useState(-1);
   const [showLyrics, setShowLyrics] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
   const [volume, setVolume] = useState(100);
@@ -52,7 +60,24 @@ export default function VisionPage() {
   const [showInsight, setShowInsight] = useState(false);
 
   const { setCurrentVision, setCurrentSong, setSceneParameters } = useVisionStore();
-  const { setIsPlaying: setAudioPlaying, setCurrentTime, setDuration, setFrequencies } = useAudioStore();
+  const { frequencies, setIsPlaying: setAudioPlaying, setCurrentTime, setDuration, setFrequencies } = useAudioStore();
+
+  const [bassScale, setBassScale] = useState(1);
+
+  // Calculate bass scale for HUD
+  useEffect(() => {
+    if (!frequencies || frequencies.length === 0) {
+      setBassScale(1);
+      return;
+    }
+    let sum = 0;
+    // Average first 5 frequency bins for bass
+    for (let i = 0; i < 5; i++) {
+      sum += frequencies[i] || 0;
+    }
+    const avg = sum / 5;
+    setBassScale(1 + (avg / 255) * 0.15);
+  }, [frequencies]);
 
   // Fetch vision and song data using centralized API (handles 401 retry)
   useEffect(() => {
@@ -136,6 +161,8 @@ export default function VisionPage() {
         );
         if (currentIndex !== -1) {
           setCurrentLyricIndex(currentIndex);
+        } else if (song.lyrics.length > 0 && audioRef.current!.currentTime < song.lyrics[0].timestamp) {
+          setCurrentLyricIndex(-1);
         }
       }
     }
@@ -252,6 +279,8 @@ export default function VisionPage() {
     }
   };
 
+
+
   if (loading) {
     return (
       <div className="w-full h-screen bg-black flex items-center justify-center">
@@ -288,7 +317,65 @@ export default function VisionPage() {
       <Scene
         enablePointerLock={true}
         sceneParameters={song.sceneParameters}
+        modelUrl={song.modelUrl}
+        splatUrl={song.splatUrl}
       />
+
+      {/* Cinematic HUD Overlay for Lyrics */}
+      <div className="absolute inset-0 pointer-events-none flex items-center justify-center z-10 overflow-hidden">
+        <AnimatePresence>
+          {isPlaying && currentLyricIndex >= 0 && song?.lyrics?.[currentLyricIndex] && showLyrics && (
+            <motion.div
+              key={currentLyricIndex}
+              initial={{ opacity: 0, y: 30 }}
+              animate={{ opacity: 1, y: -30, scale: bassScale }}
+              exit={{ opacity: 0, y: -60, filter: 'blur(10px)', transition: { duration: 0.5, ease: 'easeOut' } }}
+              transition={{
+                y: { duration: 6, ease: 'linear' }, // Slow drift upwards
+                opacity: { duration: 0.8 },
+                scale: { type: 'spring', stiffness: 300, damping: 20 },
+              }}
+              className="absolute w-full px-8 flex justify-center text-center"
+            >
+              <h1
+                className="text-4xl md:text-5xl lg:text-6xl font-black text-white/90 tracking-widest uppercase max-w-5xl leading-tight"
+                style={{
+                  textShadow: '0 0 30px rgba(168, 85, 247, 0.8), 0 0 15px rgba(6, 182, 212, 0.6), 2px 2px 0px rgba(0,0,0,1)',
+                  fontFamily: '"Inter", sans-serif',
+                }}
+              >
+                {song.lyrics[currentLyricIndex].text}
+              </h1>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
+      {/* Cinematic Lore Overlay */}
+      <AnimatePresence>
+        {song.worldLore && showInsight && (
+          <motion.div
+            initial={{ opacity: 0, x: -40 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -40 }}
+            transition={{ duration: 1.2, ease: 'easeOut' }}
+            className="absolute top-32 left-6 max-w-sm z-20 pointer-events-none"
+          >
+            <div className="border-l-4 border-purple-500 pl-4 py-2 bg-gradient-to-r from-black/60 to-transparent pr-4 rounded-r-xl backdrop-blur-sm">
+              <h3 className="text-purple-400 font-bold text-xs uppercase tracking-widest mb-2 flex items-center gap-2">
+                <Sparkles size={12} />
+                World Lore
+              </h3>
+              <p 
+                className="text-white/90 text-sm font-serif leading-relaxed italic" 
+                style={{ textShadow: '0 2px 4px rgba(0,0,0,0.8)' }}
+              >
+                "{song.worldLore}"
+              </p>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Hidden audio element — proxied through Next.js rewrite for same-origin AudioContext */}
       <audio
@@ -359,6 +446,8 @@ export default function VisionPage() {
           </motion.button>
         </div>
       </motion.div>
+
+
 
       {/* Bottom Control Bar */}
       <motion.div

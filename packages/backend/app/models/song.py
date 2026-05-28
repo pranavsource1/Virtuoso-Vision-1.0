@@ -83,12 +83,19 @@ class SceneParameters(BaseModel):
     bassReactivity: float = Field(default=0.6, ge=0, le=1)
     trebleReactivity: float = Field(default=0.4, ge=0, le=1)
 
+    # === High-level Styles ===
+    terrainStyle: str = Field(default="mountains")
+    waterType: str = Field(default="calm_lake")
+    structureType: str = Field(default="monoliths")
+    skyAtmosphere: str = Field(default="starry_space")
+
 
 class SongCreate(BaseModel):
     """Input: Create song from URL"""
     songUrl: HttpUrl
     title: Optional[str] = None
     artist: Optional[str] = None
+    vibePrompt: Optional[str] = None
 
 
 class SongDB(BaseModel):
@@ -111,6 +118,18 @@ class SongDB(BaseModel):
     transcriptionStatus: str = "pending"  # pending, processing, completed, failed
     embeddings: Optional[List[float]] = None  # Stored in Supabase
 
+    # === Local AI-generated 3D world ===
+    modelUrl: Optional[str] = None  # Local /media URL to generated GLB model file
+    splatUrl: Optional[str] = None  # Optional local /media URL to Gaussian Splat PLY file
+    generatedMusicUrl: Optional[str] = None  # Local procedural ambient audio URL
+    scene3dDescription: Optional[str] = None  # Ollama-enhanced scene description
+    worldLore: Optional[str] = None  # Ollama-generated lore
+    generationTaskId: Optional[str] = None
+    generationStatus: str = "pending"  # pending, processing, succeeded, failed
+    generationProgress: int = 0  # 0-100 for UI progress bar
+    generationError: Optional[str] = None  # Error message if generation failed
+    generatedAt: Optional[datetime] = None  # Timestamp when 3D model was generated
+
     class Config:
         json_encoders = {datetime: lambda v: v.isoformat()}
         populate_by_name = True
@@ -128,3 +147,13 @@ class SongResponse(BaseModel):
     audioUrl: str
     duration: float
     createdAt: str
+    modelUrl: Optional[str] = None
+    splatUrl: Optional[str] = None
+    generatedMusicUrl: Optional[str] = None
+    scene3dDescription: Optional[str] = None
+    worldLore: Optional[str] = None
+    generationTaskId: Optional[str] = None
+    generationStatus: str = "pending"
+    generationProgress: int = 0
+    generationError: Optional[str] = None
+    generatedAt: Optional[str] = None

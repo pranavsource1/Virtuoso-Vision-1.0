@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     MAX_UPLOAD_SIZE: int = 500 * 1024 * 1024  # 500 MB
     MEDIA_DIR: str = "media"
     PUBLIC_API_URL: str = "http://localhost:8000"
+    LOCAL_STORAGE_DIR: Optional[str] = None
+    LOCAL_STORAGE_URL: Optional[str] = None
 
     # ============ Notifications & Webhooks ============
     N8N_WEBHOOK_URL: Optional[str] = None

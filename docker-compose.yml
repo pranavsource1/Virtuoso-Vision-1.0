@@ -18,6 +18,10 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - OLLAMA_API_URL=http://ollama:11434
+      - PUBLIC_API_URL=http://localhost:8000
+      - MEDIA_DIR=/app/media
+      - LOCAL_STORAGE_DIR=/app/media
+      - LOCAL_STORAGE_URL=http://localhost:8000/media
     depends_on:
       mongodb:
         condition: service_started
@@ -75,6 +79,10 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - OLLAMA_API_URL=http://ollama:11434
+      - PUBLIC_API_URL=http://localhost:8000
+      - MEDIA_DIR=/app/media
+      - LOCAL_STORAGE_DIR=/app/media
+      - LOCAL_STORAGE_URL=http://localhost:8000/media
     depends_on:
       mongodb:
         condition: service_started

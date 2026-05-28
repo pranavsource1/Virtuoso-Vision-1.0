@@ -2,13 +2,17 @@
 
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import dynamic from 'next/dynamic';
 import { NavBar, UploadModal, TransformationLoadingModal } from '@/components/ui';
-import { Scene } from '@/components/3d/Scene';
 import { motion } from 'framer-motion';
 import { Sparkles, Music, Globe, Zap, ArrowRight, Play } from 'lucide-react';
 import { toast } from 'sonner';
 import { getAuthToken, uploadSong } from '@/lib/api';
 import { auth, setTokenCookie } from '@/lib/firebase';
+
+const Scene = dynamic(() => import('@/components/3d/Scene').then(mod => ({ default: mod.Scene })), {
+  ssr: false,
+});
 
 export default function HomePage() {
   const router = useRouter();
@@ -39,10 +43,10 @@ export default function HomePage() {
     return unsubscribe;
   }, []);
 
-  const handleUpload = async (url: string, title?: string) => {
+  const handleUpload = async (url: string, title?: string, vibePrompt?: string) => {
     try {
       setSongTitle(title || 'Your Song');
-      const { data, error } = await uploadSong(url, title);
+      const { data, error } = await uploadSong(url, title, vibePrompt);
 
       if (error) {
         throw new Error(error);

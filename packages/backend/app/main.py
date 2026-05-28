@@ -9,7 +9,7 @@ from app.services.firebase_service import firebase_service
 from app.services.supabase_service import supabase_service
 from app.services.embeddings_service import embeddings_service
 from app.ml.ollama_wrapper import ollama_service
-from app.api.routes import auth, songs, visions, health, embeddings
+from app.api.routes import auth, songs, visions, health, embeddings, generation
 
 settings = get_settings()
 os.makedirs(settings.MEDIA_DIR, exist_ok=True)
@@ -62,6 +62,7 @@ app.include_router(auth.router)
 app.include_router(songs.router)
 app.include_router(visions.router)
 app.include_router(embeddings.router)
+app.include_router(generation.router)
 app.mount("/media", StaticFiles(directory=settings.MEDIA_DIR), name="media")
 
 

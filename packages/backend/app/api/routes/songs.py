@@ -8,6 +8,31 @@ from datetime import datetime
 router = APIRouter(prefix="/api/songs", tags=["songs"])
 
 
+def to_song_response(song: SongDB) -> SongResponse:
+    """Serialize a SongDB document including local generation fields."""
+    return SongResponse(
+        id=song.id,
+        title=song.title,
+        artist=song.artist,
+        mood=song.mood.value,
+        lyrics=song.lyrics,
+        sceneParameters=song.sceneParameters,
+        visualDescription=song.visualDescription or "",
+        audioUrl=song.audioUrl,
+        duration=song.duration,
+        createdAt=song.createdAt.isoformat(),
+        modelUrl=song.modelUrl,
+        splatUrl=song.splatUrl,
+        generatedMusicUrl=song.generatedMusicUrl,
+        scene3dDescription=song.scene3dDescription,
+        generationTaskId=song.generationTaskId,
+        generationStatus=song.generationStatus,
+        generationProgress=song.generationProgress,
+        generationError=song.generationError,
+        generatedAt=song.generatedAt.isoformat() if song.generatedAt else None,
+    )
+
+
 @router.post("")
 async def create_song(song_data: SongCreate, authorization: str = Header(None)):
     """Create a new song (triggers background processing)"""
@@ -40,7 +65,7 @@ async def create_song(song_data: SongCreate, authorization: str = Header(None)):
         song_id = await mongodb_service.create_song(new_song)
 
         # Trigger background Celery task
-        task = process_song_pipeline.delay(song_id, str(song_data.songUrl), user_id)
+        task = process_song_pipeline.delay(song_id, str(song_data.songUrl), user_id, song_data.vibePrompt or "")
 
         return {
             "message": "Song processing started",
@@ -63,18 +88,7 @@ async def get_user_songs(limit: int = 50, offset: int = 0, authorization: str = 
 
         return {
             "songs": [
-                SongResponse(
-                    id=song.id,
-                    title=song.title,
-                    artist=song.artist,
-                    mood=song.mood.value,
-                    lyrics=song.lyrics,
-                    sceneParameters=song.sceneParameters,
-                    visualDescription=song.visualDescription or "",
-                    audioUrl=song.audioUrl,
-                    duration=song.duration,
-                    createdAt=song.createdAt.isoformat(),
-                )
+                to_song_response(song)
                 for song in songs
             ],
             "count": len(songs),
@@ -128,18 +142,7 @@ async def get_song(song_id: str, authorization: str = Header(None)):
         if song.userId != user_id:
             raise HTTPException(status_code=403, detail="Unauthorized")
 
-        return SongResponse(
-            id=song.id,
-            title=song.title,
-            artist=song.artist,
-            mood=song.mood.value,
-            lyrics=song.lyrics,
-            sceneParameters=song.sceneParameters,
-            visualDescription=song.visualDescription or "",
-            audioUrl=song.audioUrl,
-            duration=song.duration,
-            createdAt=song.createdAt.isoformat(),
-        )
+        return to_song_response(song)
     except HTTPException:
         raise
     except Exception as e:

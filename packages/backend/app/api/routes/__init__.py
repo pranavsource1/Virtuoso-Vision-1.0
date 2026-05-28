@@ -1,3 +1,3 @@
-from . import auth, songs, visions, health
+from . import auth, songs, visions, health, embeddings, generation
 
-__all__ = ["auth", "songs", "visions", "health"]
+__all__ = ["auth", "songs", "visions", "health", "embeddings", "generation"]

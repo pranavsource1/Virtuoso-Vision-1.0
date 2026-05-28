@@ -177,12 +177,16 @@ async function apiCall<T>(
 
 // ============ SONGS API ============
 
-export async function uploadSong(songUrl: string, title?: string) {
+export async function uploadSong(songUrl: string, title?: string, vibePrompt?: string) {
   return apiCall<{ songId: string; taskId: string; status: string }>(
     '/api/songs',
     {
       method: 'POST',
-      body: JSON.stringify({ songUrl: songUrl.trim(), title: title?.trim() || undefined }),
+      body: JSON.stringify({ 
+        songUrl: songUrl.trim(), 
+        title: title?.trim() || undefined,
+        vibePrompt: vibePrompt?.trim() || undefined
+      }),
     }
   );
 }
@@ -280,4 +284,41 @@ export function isAuthenticated(): boolean {
 export function getCurrentUserId(): string | null {
   if (typeof window === 'undefined') return null;
   return localStorage.getItem('userId');
+}
+
+// ============ 3D MUSIC WORLD GENERATION ============
+
+/**
+ * Generation response types
+ */
+export interface GenerationStatusResponse {
+  task_id?: string;
+  status: 'queued' | 'processing' | 'succeeded' | 'failed';
+  progress: number;
+  model_url?: string;
+  splat_url?: string;
+  music_url?: string;
+  scene_description?: string;
+  world_title?: string;
+  error?: string;
+}
+
+/**
+ * Trigger music world generation for a song
+ */
+export async function startMusicWorldGeneration(songId: string) {
+  return apiCall<{ task_id: string; status: string; song_id: string; message: string }>(
+    `/api/generation/music-world/${songId}`,
+    { method: 'POST' }
+  );
+}
+
+/**
+ * Poll the status of a music world generation task
+ */
+export async function getMusicWorldStatus(taskId: string) {
+  return apiCall<GenerationStatusResponse>(
+    `/api/generation/music-world/${taskId}/status`,
+    { method: 'GET' }
+  );
 }

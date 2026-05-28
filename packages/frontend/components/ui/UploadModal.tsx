@@ -6,12 +6,13 @@ import { motion } from 'framer-motion';
 interface UploadModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSubmit: (url: string, title?: string) => Promise<void>;
+  onSubmit: (url: string, title?: string, vibePrompt?: string) => Promise<void>;
 }
 
 export function UploadModal({ isOpen, onClose, onSubmit }: UploadModalProps) {
   const [songUrl, setSongUrl] = useState('');
   const [title, setTitle] = useState('');
+  const [vibePrompt, setVibePrompt] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -29,9 +30,10 @@ export function UploadModal({ isOpen, onClose, onSubmit }: UploadModalProps) {
 
     setLoading(true);
     try {
-      await onSubmit(normalizedUrl, normalizedTitle || undefined);
+      await onSubmit(normalizedUrl, normalizedTitle || undefined, vibePrompt.trim() || undefined);
       setSongUrl('');
       setTitle('');
+      setVibePrompt('');
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload failed');
@@ -88,6 +90,23 @@ export function UploadModal({ isOpen, onClose, onSubmit }: UploadModalProps) {
             />
             <p className="text-xs text-white/40 mt-2">
               Supports YouTube, Spotify, SoundCloud, and more
+            </p>
+          </div>
+
+          {/* Vibe Prompt Input */}
+          <div>
+            <label className="block text-sm font-medium text-white/70 mb-2">
+              Custom Vibe (Optional)
+            </label>
+            <input
+              type="text"
+              value={vibePrompt}
+              onChange={(e) => setVibePrompt(e.target.value)}
+              placeholder="e.g. Cyberpunk neon city, Ethereal forest..."
+              className="w-full px-4 py-3 bg-white/5 border border-white/20 rounded-lg text-white placeholder-white/30 focus:border-cyan-500 focus:outline-none transition-colors"
+            />
+            <p className="text-xs text-white/40 mt-2">
+              Describe a vibe to guide the AI world generation
             </p>
           </div>
 
