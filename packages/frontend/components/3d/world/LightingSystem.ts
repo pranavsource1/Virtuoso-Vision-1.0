@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 
 interface SP {
-  colors?: { c1: string; c2: string; c3: string; c4: string; c5: string };
+  colors?: { c1?: string; c2?: string; c3?: string; c4?: string; c5?: string };
   geometryComplexity?: number;
   geometryDistortion?: number;
   geometrySharpness?: number;
@@ -100,13 +100,26 @@ export class LightingSystem {
     this.scene.fog = new THREE.FogExp2(fogColor, fogDensity);
   }
 
-  update(bass: number, mid: number, treble: number, time: number): void {
+  update(bass: number, mid: number, treble: number, time: number, params?: SP): void {
+    const liveParams = params ?? this.params;
+    const bassReact = liveParams.bassReactivity ?? this.params.bassReactivity ?? 0.6;
+    const trebleReact = liveParams.trebleReactivity ?? this.params.trebleReactivity ?? 0.4;
+    const glowIntensity = liveParams.glowIntensity ?? this.params.glowIntensity ?? 0.5;
+    const fogDensity = liveParams.fogDensity ?? this.params.fogDensity ?? 0.3;
+    const pulseIntensity = liveParams.pulseIntensity ?? this.params.pulseIntensity ?? 0.3;
+    const pulse = (Math.sin(time * 1.2) * 0.5 + 0.5) * pulseIntensity;
+
     // Directional light intensity pulses gently with bass
-    this.directionalLight.intensity = 0.4 + bass * 0.3;
+    this.directionalLight.intensity =
+      this.originalDirectionalIntensity + bass * bassReact * 0.45 + glowIntensity * 0.2 + pulse * 0.15;
 
     // Hemisphere light sky color shifts slightly with treble
-    const skyLerp = THREE.MathUtils.clamp(treble * 0.3, 0, 1);
+    const skyLerp = THREE.MathUtils.clamp(treble * trebleReact * 0.5 + mid * 0.1, 0, 1);
     this.hemisphereLight.color.copy(this.originalSkyColor).lerp(this.trebleShiftColor, skyLerp);
+
+    if (this.scene.fog instanceof THREE.FogExp2) {
+      this.scene.fog.density = fogDensity * 0.008 * (1 + bass * bassReact * 0.35);
+    }
   }
 
   dispose(): void {

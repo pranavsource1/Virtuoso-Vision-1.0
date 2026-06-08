@@ -52,7 +52,7 @@ class OllamaService:
 
     async def _generate(self, prompt: str, temperature: float = 0.7) -> Optional[str]:
         try:
-            async with httpx.AsyncClient(timeout=300.0) as client:
+            async with httpx.AsyncClient(timeout=120.0) as client:
                 response = await client.post(
                     f"{self.base_url}/api/generate",
                     json={"model": self.model, "prompt": prompt, "stream": False, "temperature": temperature}
@@ -221,6 +221,113 @@ Return ONLY the JSON. No explanation."""
         except Exception as e:
             print(f"❌ Parse failed: {e}\nResponse: {response_text}")
             return _get_fallback_params(lyrics_hash)
+
+    async def generate_scene_choreography(
+        self,
+        base_parameters: SceneParameters,
+        song_sections: list,
+        lyrical_moments: list,
+        mood: str,
+        song_title: str,
+        audio_features: dict
+    ) -> Optional[dict]:
+        """Generate choreography keyframes tied to song structure and emotional content."""
+
+        from app.models import SceneChoreography, ParameterKeyframe, LyricalMoment as LyricalMomentModel
+
+        try:
+            # Map sections to parameter variations
+            keyframes = []
+
+            # Create keyframe for each section
+            for section in song_sections:
+                start_time = section.get("start_time", 0.0)
+                section_type = section.get("section_type", "verse")
+                energy_level = section.get("energy_level", 0.5)
+
+                # Generate section-specific parameters
+                params_dict = base_parameters.dict()
+
+                # Verse: calm, subtle
+                if section_type == "verse":
+                    params_dict["particleDensity"] *= 0.6
+                    params_dict["glowIntensity"] *= 0.7
+                    params_dict["rotationSpeed"] *= 0.5
+                    params_dict["pulseIntensity"] *= 0.4
+
+                # Chorus: energetic, intense
+                elif section_type == "chorus":
+                    params_dict["particleDensity"] *= 1.3
+                    params_dict["glowIntensity"] *= 1.2
+                    params_dict["rotationSpeed"] *= 1.5
+                    params_dict["pulseIntensity"] *= 1.3
+                    params_dict["particleTurbulence"] *= 1.2
+
+                # Bridge: climax, dramatic
+                elif section_type == "bridge":
+                    params_dict["particleDensity"] *= 1.5
+                    params_dict["glowIntensity"] *= 1.4
+                    params_dict["rotationSpeed"] *= 2.0
+                    params_dict["pulseIntensity"] *= 1.5
+                    params_dict["geometryComplexity"] *= 1.2
+
+                # Outro: resolution, fade
+                elif section_type == "outro":
+                    params_dict["particleDensity"] *= 0.4
+                    params_dict["glowIntensity"] *= 0.5
+                    params_dict["rotationSpeed"] *= 0.3
+                    params_dict["fogDensity"] *= 1.3
+
+                # Clamp parameters to valid ranges
+                for key, value in params_dict.items():
+                    if isinstance(value, (int, float)) and key != "colors":
+                        if key == "geometryScale":
+                            params_dict[key] = max(0.3, min(3.0, float(value)))
+                        elif key == "particleGravity":
+                            params_dict[key] = max(-1.0, min(1.0, float(value)))
+                        elif isinstance(value, float):
+                            params_dict[key] = max(0.0, min(1.0, float(value)))
+
+                keyframe = ParameterKeyframe(
+                    timestamp=start_time,
+                    parameters=SceneParameters(**params_dict),
+                    trigger_type="section_change"
+                )
+                keyframes.append(keyframe)
+
+            # Convert lyrical moments to choreography lyrical moments
+            chore_lyrical_moments = []
+            for moment in lyrical_moments:
+                chore_moment = LyricalMomentModel(
+                    timestamp=moment.get("timestamp", 0.0),
+                    sentiment=moment.get("sentiment", "neutral"),
+                    intensity=moment.get("intensity", 0.5),
+                    lyric_text=moment.get("text", "")
+                )
+                chore_lyrical_moments.append(chore_moment)
+
+            # Build choreography
+            choreography = SceneChoreography(
+                base_parameters=base_parameters,
+                keyframes=keyframes,
+                lyrical_moments=chore_lyrical_moments,
+                sections=[
+                    {
+                        "section_type": s["section_type"],
+                        "start_time": s["start_time"],
+                        "end_time": s["end_time"],
+                        "energy_level": s.get("energy_level", 0.5),
+                    }
+                    for s in song_sections
+                ]
+            )
+
+            print(f"✅ Generated choreography with {len(keyframes)} keyframes and {len(chore_lyrical_moments)} lyrical moments")
+            return choreography.dict()
+
+        except Exception as e:
+            print(f"❌ Choreography generation failed: {e}")
+            return None
 
     async def generate_visual_prompt(self, lyrics: str, mood: str) -> Optional[str]:
         prompt = f"""You are a synesthete who sees vivid, unique worlds when listening to music.

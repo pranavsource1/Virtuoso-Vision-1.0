@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 
 interface SP {
-  colors?: { c1: string; c2: string; c3: string; c4: string; c5: string };
+  colors?: { c1?: string; c2?: string; c3?: string; c4?: string; c5?: string };
   geometryComplexity?: number; geometryDistortion?: number; geometrySharpness?: number;
   geometryScale?: number; symmetry?: number;
   terrainHeight?: number; terrainFrequency?: number; terrainErosion?: number;
@@ -29,7 +29,7 @@ const skyVertexShader = /* glsl */ `
 `;
 
 // ---------------------------------------------------------------------------
-// Fragment shader — gradient sky, stars, FBM clouds, horizon glow
+// Fragment shader — gradient sky, stars, FBM clouds, horizon glow, moon/sun
 // ---------------------------------------------------------------------------
 const skyFragmentShader = /* glsl */ `
   uniform vec3 uTopColor;
@@ -38,6 +38,7 @@ const skyFragmentShader = /* glsl */ `
   uniform vec3 uStarColor;
   uniform float uTime;
   uniform float uBass;
+  uniform float uCloudDensity;
 
   varying vec3 vWorldPosition;
 
@@ -78,19 +79,18 @@ const skyFragmentShader = /* glsl */ `
   }
 
   void main() {
-    // Normalized height in [-1, 1] range
-    float height = normalize(vWorldPosition).y;
+    // Normalized direction
+    vec3 dir = normalize(vWorldPosition);
+    float height = dir.y;
 
     // ------------------------------------------------------------------
     // 1. Sky gradient: bottom → horizon → top
     // ------------------------------------------------------------------
     vec3 skyColor;
     if (height < 0.0) {
-      // Below horizon — blend bottom to horizon
       float t = smoothstep(-0.5, 0.0, height);
       skyColor = mix(uBottomColor, uHorizonColor, t);
     } else {
-      // Above horizon — blend horizon to top
       float t = smoothstep(0.0, 0.7, height);
       skyColor = mix(uHorizonColor, uTopColor, t);
     }
@@ -103,34 +103,36 @@ const skyFragmentShader = /* glsl */ `
       float starHash = hash(starUV);
 
       if (starHash > 0.985) {
-        // Twinkle — bass makes twinkle more intense
         float twinkle = sin(uTime * 2.0 + starHash * 100.0) * 0.5 + 0.5;
-        twinkle = mix(twinkle, 1.0, uBass * 0.5);
+        twinkle = mix(twinkle, 1.0, uBass * 0.2);
 
         float starBrightness = twinkle * smoothstep(0.05, 0.3, height);
-        skyColor += uStarColor * starBrightness * 0.8;
+        skyColor += uStarColor * starBrightness * 0.5;
       }
     }
 
     // ------------------------------------------------------------------
     // 3. Clouds — FBM noise on xz plane
     // ------------------------------------------------------------------
-    vec2 cloudUV = vWorldPosition.xz * 0.003 + uTime * 0.01;
+    vec2 cloudUV = vWorldPosition.xz * 0.003 + uTime * (0.01 + uBass * 0.02);
     float cloudNoise = fbm(cloudUV);
-    float cloudMask = smoothstep(0.45, 0.65, cloudNoise);
+    float cloudMask = smoothstep(1.0 - uCloudDensity, 1.2 - uCloudDensity, cloudNoise);
 
-    // Clouds only in upper portion, fade near horizon
     float cloudHeightMask = smoothstep(0.05, 0.25, height) * smoothstep(0.9, 0.5, height);
-    cloudMask *= cloudHeightMask * 0.25;
+    cloudMask *= cloudHeightMask * (0.2 + uCloudDensity * 0.3); // max 0.5 opacity based on density
 
-    vec3 cloudColor = mix(uHorizonColor, vec3(1.0), 0.3);
+    // Cloud edge lighting (fake scattering from horizon)
+    float cloudNoiseRight = fbm(cloudUV + vec2(0.01, 0.0));
+    float cloudEdge = max(0.0, cloudNoise - cloudNoiseRight);
+
+    vec3 cloudColor = mix(uHorizonColor, vec3(1.0), 0.3) + uHorizonColor * cloudEdge * 2.5;
     skyColor = mix(skyColor, cloudColor, cloudMask);
 
     // ------------------------------------------------------------------
     // 4. Horizon glow — bright band near y = 0
     // ------------------------------------------------------------------
     float horizonGlow = exp(-abs(height) * 8.0);
-    float glowStrength = 0.35 + uBass * 0.4; // bass makes glow brighter
+    float glowStrength = 0.35 + uBass * 0.4;
     skyColor += uHorizonColor * horizonGlow * glowStrength;
 
     gl_FragColor = vec4(skyColor, 1.0);
@@ -138,7 +140,7 @@ const skyFragmentShader = /* glsl */ `
 `;
 
 // ---------------------------------------------------------------------------
-// SkySystem — dynamic gradient sky dome
+// SkySystem — dynamic gradient sky dome with celestial body
 // ---------------------------------------------------------------------------
 export class SkySystem {
   private scene: THREE.Scene;
@@ -182,6 +184,7 @@ export class SkySystem {
         uStarColor: { value: new THREE.Vector3(starColor.r, starColor.g, starColor.b) },
         uTime: { value: 0.0 },
         uBass: { value: 0.0 },
+        uCloudDensity: { value: params.cloudDensity ?? 0.5 },
       },
       vertexShader: skyVertexShader,
       fragmentShader: skyFragmentShader,
@@ -189,17 +192,27 @@ export class SkySystem {
       depthWrite: false,
     });
 
-    this.geometry = new THREE.SphereGeometry(800, 32, 32);
+    this.geometry = new THREE.SphereGeometry(900, 32, 32);
     this.mesh = new THREE.Mesh(this.geometry, this.material);
+    this.mesh.name = 'sky_dome';
     this.scene.add(this.mesh);
   }
 
   // -------------------------------------------------------------------------
   // update — called every frame
   // -------------------------------------------------------------------------
-  update(bass: number, _mid: number, _treble: number, time: number): void {
+  update(bass: number, _mid: number, treble: number, time: number, params?: SP): void {
+    const liveParams = params ?? {};
+    const bassReact = liveParams.bassReactivity ?? 0.6;
+    const trebleReact = liveParams.trebleReactivity ?? 0.4;
+    const glowIntensity = liveParams.glowIntensity ?? 0.5;
+
     this.material.uniforms.uTime.value = time;
-    this.material.uniforms.uBass.value = bass;
+    this.material.uniforms.uBass.value = THREE.MathUtils.clamp(
+      bass * bassReact + treble * trebleReact * 0.35 + glowIntensity * 0.15,
+      0,
+      1
+    );
   }
 
   // -------------------------------------------------------------------------

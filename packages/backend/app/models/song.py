@@ -16,10 +16,13 @@ class MoodEnum(str, Enum):
 
 
 class LyricSegment(BaseModel):
-    """Individual lyric with timestamp"""
+    """Individual lyric with timestamp and sentiment"""
     text: str
     timestamp: float  # seconds
     confidence: float = 0.9
+    sentiment: str = "neutral"  # NEW: pos/negative/neutral
+    intensity: float = Field(default=0.5, ge=0, le=1)  # NEW: 0-1 emotional intensity
+    sentiment_score: Optional[float] = None  # Confidence in sentiment classification
 
 
 class AudioFeatures(BaseModel):
@@ -90,6 +93,39 @@ class SceneParameters(BaseModel):
     skyAtmosphere: str = Field(default="starry_space")
 
 
+class SongSection(BaseModel):
+    """Detected song structure section"""
+    section_type: str  # verse/chorus/bridge/outro
+    start_time: float  # seconds
+    end_time: float  # seconds
+    energy_level: float = Field(default=0.5, ge=0, le=1)
+    confidence: float = Field(default=0.75, ge=0, le=1)
+
+
+class ParameterKeyframe(BaseModel):
+    """Scene parameter snapshot at a specific time"""
+    timestamp: float  # seconds
+    parameters: SceneParameters
+    trigger_type: str = "section_change"  # section_change / lyrical_moment
+
+
+class LyricalMoment(BaseModel):
+    """Emotional peak in the song"""
+    timestamp: float
+    sentiment: str  # positive/negative/neutral
+    intensity: float = Field(ge=0, le=1)
+    lyric_text: Optional[str] = None
+
+
+class SceneChoreography(BaseModel):
+    """Time-based parameter choreography for scene"""
+    base_parameters: SceneParameters
+    keyframes: List[ParameterKeyframe]  # Sorted by timestamp
+    lyrical_moments: List[LyricalMoment]
+    sections: List[SongSection]
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 class SongCreate(BaseModel):
     """Input: Create song from URL"""
     songUrl: HttpUrl
@@ -112,6 +148,7 @@ class SongDB(BaseModel):
     audioFeatures: AudioFeatures
     visualDescription: str  # Ollama-generated description
     sceneParameters: SceneParameters
+    sceneChoreography: Optional[SceneChoreography] = None  # NEW: Time-based choreography
     createdAt: datetime = Field(default_factory=datetime.utcnow)
     updatedAt: datetime = Field(default_factory=datetime.utcnow)
     duration: float  # in seconds
@@ -143,6 +180,7 @@ class SongResponse(BaseModel):
     mood: str
     lyrics: List[LyricSegment]
     sceneParameters: SceneParameters
+    sceneChoreography: Optional[dict] = None  # NEW: Time-based choreography (JSON serializable)
     visualDescription: str = ""
     audioUrl: str
     duration: float

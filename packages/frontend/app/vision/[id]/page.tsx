@@ -315,7 +315,7 @@ export default function VisionPage() {
     <div className="relative w-full h-screen bg-black overflow-hidden">
       {/* 3D Scene */}
       <Scene
-        enablePointerLock={true}
+        enableFreeMove={true}
         sceneParameters={song.sceneParameters}
         modelUrl={song.modelUrl}
         splatUrl={song.splatUrl}
@@ -717,9 +717,11 @@ export default function VisionPage() {
         )}
       </AnimatePresence>
 
-      {/* ESC Hint */}
-      <div className="absolute top-24 right-6 text-white/40 text-xs z-20 hidden sm:block">
-        Press <strong>ESC</strong> to exit PointerLock
+      {/* Controls Hint */}
+      <div className="absolute top-24 right-6 text-white/40 text-xs z-20 hidden sm:block text-right pointer-events-none">
+        <p><strong>Left Click</strong> to Orbit</p>
+        <p><strong>Scroll</strong> to Zoom</p>
+        <p><strong>Right Click</strong> to Pan</p>
       </div>
     </div>
   );

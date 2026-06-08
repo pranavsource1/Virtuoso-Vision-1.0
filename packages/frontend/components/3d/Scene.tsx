@@ -1,7 +1,13 @@
 'use client';
 import React, { useRef, useMemo, useEffect, useState } from 'react';
 import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { useAudioStore } from '@/lib/audio-store';
+import {
+  ChoreographyEngine,
+  type SceneChoreography,
+  type SceneParameters,
+} from '@/lib/choreography-engine';
 
 
 // World systems
@@ -15,19 +21,7 @@ import { SkySystem } from './world/SkySystem';
 import { LightingSystem } from './world/LightingSystem';
 import { PostProcessingPipeline } from './world/PostProcessingPipeline';
 
-interface SP {
-  colors?: { c1: string; c2: string; c3: string; c4: string; c5: string };
-  geometryComplexity?: number; geometryDistortion?: number; geometrySharpness?: number;
-  geometryScale?: number; symmetry?: number;
-  terrainHeight?: number; terrainFrequency?: number; terrainErosion?: number;
-  particleDensity?: number; particleSize?: number; particleGravity?: number;
-  particleTurbulence?: number; particleSpread?: number;
-  fogDensity?: number; glowIntensity?: number; noiseScale?: number;
-  rotationSpeed?: number; pulseIntensity?: number; waveSpeed?: number;
-  metalness?: number; roughness?: number; emissiveStrength?: number; transparency?: number;
-  cameraDistance?: number; cameraHeight?: number;
-  bassReactivity?: number; trebleReactivity?: number;
-}
+type SP = SceneParameters;
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -62,22 +56,45 @@ function disposeObject3D(root: THREE.Object3D) {
   });
 }
 
+function clamp01(value: number): number {
+  return Math.min(1, Math.max(0, value));
+}
 
+function mergeSceneParameters(base: SP, choreographyParams: SP, lyricalIntensity: number): SP {
+  const merged: SP = {
+    ...base,
+    ...choreographyParams,
+    colors: {
+      ...(base.colors ?? {}),
+      ...(choreographyParams.colors ?? {}),
+    },
+  };
 
+  const particleDensity = merged.particleDensity ?? 0.6;
+  const glowIntensity = merged.glowIntensity ?? 0.7;
+
+  return {
+    ...merged,
+    particleDensity: clamp01(particleDensity * (1 + lyricalIntensity * 0.45)),
+    glowIntensity: clamp01(glowIntensity * (1 + lyricalIntensity * 0.3)),
+  };
+}
 
 
 // ── Scene Component ──────────────────────────────────────────────────
 
 export function Scene({
   sceneParameters: sp,
-  enablePointerLock,
+  enableFreeMove,
   modelUrl,
   splatUrl,
+  choreography,
 }: {
-  enablePointerLock?: boolean;
+  enableFreeMove?: boolean;
   sceneParameters?: SP;
   modelUrl?: string | null;
   splatUrl?: string | null;
+  choreography?: SceneChoreography | null;
 }) {
   const defaults = useMemo<SP>(() => ({
     colors: { c1: '#06B6D4', c2: '#8B5CF6', c3: '#F97316', c4: '#22C55E', c5: '#EC4899' },
@@ -141,8 +158,12 @@ export function Scene({
   // without requiring the effect to re-run.
   const paramsRef = useRef(params);
   const colorsRef = useRef(colors);
+  const choreographyEngineRef = useRef<ChoreographyEngine | null>(null);
   useEffect(() => { paramsRef.current = params; }, [params]);
   useEffect(() => { colorsRef.current = colors; }, [colors]);
+  useEffect(() => {
+    choreographyEngineRef.current = choreography ? new ChoreographyEngine(choreography) : null;
+  }, [choreography]);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -262,42 +283,17 @@ export function Scene({
           return;
         }
 
-        // ── 7. FPS Controls ──
-        const keysPressed: Record<string, boolean> = {};
-        const euler = new THREE.Euler(0, 0, 0, 'YXZ');
-
-        const handleKeyDown = (e: KeyboardEvent) => {
-          keysPressed[e.key.toLowerCase()] = true;
-        };
-        const handleKeyUp = (e: KeyboardEvent) => {
-          keysPressed[e.key.toLowerCase()] = false;
-        };
-
-        window.addEventListener('keydown', handleKeyDown);
-        window.addEventListener('keyup', handleKeyUp);
-
-        let pointerLocked = false;
-
-        const handleMouseMove = (e: MouseEvent) => {
-          if (!pointerLocked) return;
-          euler.setFromQuaternion(camera.quaternion);
-          euler.y -= e.movementX * 0.002;
-          euler.x -= e.movementY * 0.002;
-          euler.x = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, euler.x));
-          camera.quaternion.setFromEuler(euler);
-        };
-
-        const handleCanvasClick = () => {
-          renderer.domElement.requestPointerLock?.();
-        };
-        const handlePointerLockChange = () => {
-          pointerLocked = document.pointerLockElement === renderer.domElement;
-        };
-
-        if (enablePointerLock) {
-          renderer.domElement.addEventListener('click', handleCanvasClick);
-          document.addEventListener('pointerlockchange', handlePointerLockChange);
-          document.addEventListener('mousemove', handleMouseMove);
+        // ── 7. Orbit Controls (Free Move) ──
+        let controls: OrbitControls | null = null;
+        if (enableFreeMove) {
+          controls = new OrbitControls(camera, renderer.domElement);
+          controls.enableDamping = true;
+          controls.dampingFactor = 0.05;
+          controls.maxDistance = 1500;
+          controls.maxPolarAngle = Math.PI / 2 + 0.1; // allow looking slightly below horizon
+          
+          // Disable default right-click context menu on canvas so we can pan
+          renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
         }
 
         // ── 8. Animation loop ──
@@ -315,34 +311,10 @@ export function Scene({
           lastTime = now;
           const time = now * 0.001; // seconds
 
-          // ── FPS movement ──
-          if (pointerLocked && enablePointerLock && cameraRef.current) {
-            const speed = 0.4;
-            const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
-            const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
-            forward.y = 0;
-            forward.normalize();
-            right.y = 0;
-            right.normalize();
-
-            if (keysPressed['w']) camera.position.addScaledVector(forward, speed);
-            if (keysPressed['s']) camera.position.addScaledVector(forward, -speed);
-            if (keysPressed['d']) camera.position.addScaledVector(right, speed);
-            if (keysPressed['a']) camera.position.addScaledVector(right, -speed);
-            if (keysPressed[' ']) camera.position.y += speed * 0.6;
-            if (keysPressed['shift']) camera.position.y -= speed * 0.6;
-          } else {
-            // Idle drift
-            const drift = Math.sin(now * 0.00015) * 6;
-            const driftZ = Math.cos(now * 0.0001) * 4;
-            camera.position.x += (drift - camera.position.x) * 0.008;
-            camera.position.z += (50 + driftZ - camera.position.z) * 0.005;
-            camera.lookAt(0, 2, 0);
-          }
-
-          // ── Audio extraction ──
-          const { frequencies, isPlaying } =
-            useAudioStore.getState?.() || { frequencies: null, isPlaying: false };
+          const storeState = useAudioStore.getState?.();
+          const frequencies = storeState?.frequencies ?? null;
+          const isPlaying = storeState?.isPlaying ?? false;
+          const currentTime = storeState?.currentTime ?? 0;
           let bass = 0, mid = 0, treble = 0;
 
           if (frequencies && isPlaying && frequencies.length > 0) {
@@ -359,15 +331,45 @@ export function Scene({
             treble = treble / (Math.max(l - mEnd, 1) * 255);
           }
 
-          // ── Update all world systems ──
-          terrain?.update(bass, mid, treble, time);
-          vegetation?.update(bass, mid, treble, time);
-          structures?.update(bass, mid, treble, time);
-          water?.update(bass, mid, treble, time);
-          particles?.update(bass, mid, treble, time);
-          sky?.update(bass, mid, treble, time);
-          lighting?.update(bass, mid, treble, time);
-          postProcessing?.update(bass, mid, treble, time);
+          let choreographyParams: SP = {};
+          let lyricalIntensity = 0;
+          if (choreographyEngineRef.current && isPlaying) {
+            choreographyParams = choreographyEngineRef.current.getCurrentParameters(currentTime);
+            lyricalIntensity = choreographyEngineRef.current.getLyricalMomentIntensity(currentTime);
+          }
+
+          const finalParams = mergeSceneParameters(
+            paramsRef.current,
+            choreographyParams,
+            lyricalIntensity
+          );
+
+          // ── Camera Update ──
+          if (controls && enableFreeMove) {
+            controls.update();
+          } else {
+            // Idle drift
+            const targetDistance = 32 + (finalParams.cameraDistance ?? 0.5) * 56;
+            const targetHeight = 10 + (finalParams.cameraHeight ?? 0.5) * 28;
+            const lookAtHeight = 2 + (finalParams.cameraHeight ?? 0.5) * 8;
+            const drift = Math.sin(now * 0.00015) * 6;
+            const driftZ = Math.cos(now * 0.0001) * 4;
+            camera.position.x += (drift - camera.position.x) * 0.008;
+            camera.position.y += (targetHeight - camera.position.y) * 0.006;
+            camera.position.z += (targetDistance + driftZ - camera.position.z) * 0.005;
+            camera.lookAt(0, lookAtHeight, 0);
+          }
+
+          // ── Audio extraction ──
+          // ── Update all world systems (pass finalParams instead of default params) ──
+          terrain?.update(bass, mid, treble, time, finalParams);
+          vegetation?.update(bass, mid, treble, time, finalParams);
+          structures?.update(bass, mid, treble, time, finalParams);
+          water?.update(bass, mid, treble, time, finalParams);
+          particles?.update(bass, mid, treble, time, finalParams);
+          sky?.update(bass, mid, treble, time, finalParams);
+          lighting?.update(bass, mid, treble, time, finalParams);
+          postProcessing?.update(bass, mid, treble, time, finalParams);
 
           // ── Render via post-processing composer ──
           if (postProcessing) {
@@ -394,12 +396,8 @@ export function Scene({
         cleanupScene = () => {
           if (frameId) cancelAnimationFrame(frameId);
 
-          window.removeEventListener('keydown', handleKeyDown);
-          window.removeEventListener('keyup', handleKeyUp);
           window.removeEventListener('resize', handleResize);
-          renderer.domElement.removeEventListener('click', handleCanvasClick);
-          document.removeEventListener('pointerlockchange', handlePointerLockChange);
-          document.removeEventListener('mousemove', handleMouseMove);
+          controls?.dispose();
 
           // Dispose world systems
           postProcessing?.dispose();
@@ -447,7 +445,7 @@ export function Scene({
       cleanupScene?.();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enablePointerLock, modelUrl, splatUrl]);
+  }, [enableFreeMove, modelUrl, splatUrl]);
 
   return (
     <div className="absolute inset-0 w-full h-full z-0">

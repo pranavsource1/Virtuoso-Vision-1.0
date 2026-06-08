@@ -116,63 +116,82 @@ function mergeHeaders(options: RequestInit, token: string): Record<string, strin
  */
 async function apiCall<T>(
   endpoint: string,
-  options: RequestInit = {}
+  options: RequestInit = {},
+  retries: number = 2
 ): Promise<{ data: T | null; error: string | null }> {
-  try {
-    const url = `${API_BASE_URL}${endpoint}`;
-    const method = options.method || 'GET';
-    console.log(`API Call: ${method} ${url}`);
+  const url = `${API_BASE_URL}${endpoint}`;
+  const method = options.method || 'GET';
 
-    const token = await getAuthToken();
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      if (attempt > 0) {
+        console.log(`API Retry ${attempt}/${retries}: ${method} ${url}`);
+        await new Promise(r => setTimeout(r, 1000 * attempt));
+      } else {
+        console.log(`API Call: ${method} ${url}`);
+      }
 
-    if (!token) {
-      return { data: null, error: 'Unauthorized - no token available. Please login.' };
-    }
+      const token = await getAuthToken();
 
-    const makeRequest = (authToken: string) => fetch(url, {
-      ...options,
-      headers: mergeHeaders(options, authToken),
-    });
+      if (!token) {
+        return { data: null, error: 'Unauthorized - no token available. Please login.' };
+      }
 
-    let response = await makeRequest(token);
-    console.log(`Response Status: ${response.status} ${response.statusText}`);
-
-    if (response.status === 401) {
-      console.warn('Backend rejected token. Refreshing Firebase token and retrying once.');
-      const refreshedToken = await getAuthToken({
-        forceRefresh: true,
-        allowCachedToken: false,
+      const makeRequest = (authToken: string) => fetch(url, {
+        ...options,
+        headers: mergeHeaders(options, authToken),
       });
 
-      if (refreshedToken) {
-        response = await makeRequest(refreshedToken);
-        console.log(`Retry Response Status: ${response.status} ${response.statusText}`);
+      let response = await makeRequest(token);
+      console.log(`Response Status: ${response.status} ${response.statusText}`);
+
+      if (response.status === 401) {
+        console.warn('Backend rejected token. Refreshing Firebase token and retrying once.');
+        const refreshedToken = await getAuthToken({
+          forceRefresh: true,
+          allowCachedToken: false,
+        });
+
+        if (refreshedToken) {
+          response = await makeRequest(refreshedToken);
+          console.log(`Retry Response Status: ${response.status} ${response.statusText}`);
+        }
+      }
+
+      if (response.status === 401) {
+        const errorData = await response.json().catch(() => ({}));
+        console.error('Backend auth error detail:', errorData);
+        return {
+          data: null,
+          error: `Unauthorized: ${errorData.detail || 'Token verification failed. Please sign out and sign in again.'}`,
+        };
+      }
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        const errorMessage = errorData.detail || errorData.message || `HTTP ${response.status}`;
+        console.error(`API Error: ${errorMessage}`);
+        return { data: null, error: errorMessage };
+      }
+
+      const data = await response.json();
+      return { data, error: null };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      console.error(`API Error [${endpoint}] (attempt ${attempt + 1}):`, errorMessage);
+
+      // Only retry on network-level errors (Failed to fetch), not on logic errors
+      const isNetworkError = errorMessage.toLowerCase().includes('failed to fetch') ||
+                             errorMessage.toLowerCase().includes('network') ||
+                             errorMessage.toLowerCase().includes('timeout');
+
+      if (!isNetworkError || attempt >= retries) {
+        return { data: null, error: `${errorMessage}. Make sure the backend is running at ${API_BASE_URL}` };
       }
     }
-
-    if (response.status === 401) {
-      const errorData = await response.json().catch(() => ({}));
-      console.error('Backend auth error detail:', errorData);
-      return {
-        data: null,
-        error: `Unauthorized: ${errorData.detail || 'Token verification failed. Please sign out and sign in again.'}`,
-      };
-    }
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      const errorMessage = errorData.detail || errorData.message || `HTTP ${response.status}`;
-      console.error(`API Error: ${errorMessage}`);
-      return { data: null, error: errorMessage };
-    }
-
-    const data = await response.json();
-    return { data, error: null };
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
-    console.error(`API Error [${endpoint}]:`, errorMessage);
-    return { data: null, error: errorMessage };
   }
+
+  return { data: null, error: `Request failed after ${retries + 1} attempts. Backend may be down.` };
 }
 
 // ============ SONGS API ============

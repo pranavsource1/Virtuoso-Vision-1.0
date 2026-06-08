@@ -10,9 +10,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy and install requirements
+# Install PyTorch CPU-only first (avoids downloading ~2GB of NVIDIA CUDA libs)
+RUN pip install --no-cache-dir --timeout 120 \
+    torch==2.1.1+cpu --index-url https://download.pytorch.org/whl/cpu
+
+# Copy and install remaining requirements (torch already satisfied, will be skipped)
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --timeout 120 -r requirements.txt
 
 # Copy app code
 COPY ./app /app/app

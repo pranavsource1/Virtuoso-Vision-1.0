@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 
 interface SP {
-  colors?: { c1: string; c2: string; c3: string; c4: string; c5: string };
+  colors?: { c1?: string; c2?: string; c3?: string; c4?: string; c5?: string };
   geometryComplexity?: number; geometryDistortion?: number; geometrySharpness?: number;
   geometryScale?: number; symmetry?: number;
   terrainHeight?: number; terrainFrequency?: number; terrainErosion?: number;
@@ -25,6 +25,7 @@ const fireflyVertexShader = /* glsl */ `
   uniform float uTime;
   uniform float uGlowIntensity;
   uniform float uBass;
+  uniform float uParticleSize;
 
   varying vec3 vColor;
   varying float vGlow;
@@ -36,7 +37,7 @@ const fireflyVertexShader = /* glsl */ `
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
 
     // Size attenuation — particles shrink with distance
-    float size = 3.0 + uGlowIntensity * 2.0 + (uBass * 10.0 * aAudioReactivity);
+    float size = 2.0 + uParticleSize * 8.0 + uGlowIntensity * 2.0 + (uBass * 10.0 * aAudioReactivity);
     gl_PointSize = size * (300.0 / -mvPosition.z);
 
     gl_Position = projectionMatrix * mvPosition;
@@ -156,6 +157,7 @@ export class ParticleSystem {
         uTime: { value: 0.0 },
         uGlowIntensity: { value: params.glowIntensity ?? 1.0 },
         uBass: { value: 0.0 },
+        uParticleSize: { value: params.particleSize ?? 0.5 },
       },
       vertexShader: fireflyVertexShader,
       fragmentShader: fireflyFragmentShader,
@@ -206,15 +208,61 @@ export class ParticleSystem {
   }
 
   // -------------------------------------------------------------------------
-  // update — called every frame
+  // update — called every frame with choreography parameters
   // -------------------------------------------------------------------------
-  update(bass: number, mid: number, treble: number, time: number): void {
-    const spread = this.params.particleSpread ?? 1;
+  update(bass: number, mid: number, treble: number, time: number, params?: SP): void {
+    const spreadParam = THREE.MathUtils.clamp(
+      params?.particleSpread ?? this.params.particleSpread ?? 0.6,
+      0,
+      1
+    );
+    const spread = THREE.MathUtils.lerp(0.35, 1.25, spreadParam);
     const halfBox = 150 * spread;
+    const density = THREE.MathUtils.clamp(
+      params?.particleDensity ?? this.params.particleDensity ?? 0.6,
+      0,
+      1
+    );
+    const particleSize = THREE.MathUtils.clamp(
+      params?.particleSize ?? this.params.particleSize ?? 0.5,
+      0,
+      1
+    );
+    const glowIntensity = THREE.MathUtils.clamp(
+      params?.glowIntensity ?? this.params.glowIntensity ?? 0.7,
+      0,
+      1
+    );
+    const gravity = THREE.MathUtils.clamp(
+      params?.particleGravity ?? this.params.particleGravity ?? 0,
+      -1,
+      1
+    );
+    const turbulence = THREE.MathUtils.clamp(
+      params?.particleTurbulence ?? this.params.particleTurbulence ?? 0.4,
+      0,
+      1
+    );
+    const bassReactivity = THREE.MathUtils.clamp(
+      params?.bassReactivity ?? this.params.bassReactivity ?? 0.6,
+      0,
+      1
+    );
+    const trebleReactivity = THREE.MathUtils.clamp(
+      params?.trebleReactivity ?? this.params.trebleReactivity ?? 0.4,
+      0,
+      1
+    );
+    const bassEnergy = bass * bassReactivity;
+    const trebleEnergy = treble * trebleReactivity;
+    const trebleSpike = Math.max(0, trebleEnergy - 0.28);
 
     // --- Fireflies ---
-    this.fireflyMaterial.uniforms.uGlowIntensity.value = 0.5 + bass * 1.5;
-    this.fireflyMaterial.uniforms.uBass.value = bass;
+    this.fireflyPoints.visible = density > 0.02;
+    this.fireflyMaterial.uniforms.uGlowIntensity.value =
+      (0.25 + glowIntensity * 1.5) * (0.35 + density * 0.65) + bassEnergy * 1.1;
+    this.fireflyMaterial.uniforms.uBass.value = bassEnergy;
+    this.fireflyMaterial.uniforms.uParticleSize.value = particleSize;
     this.fireflyMaterial.uniforms.uTime.value = time;
 
     const positions = this.fireflyPositions;
@@ -223,13 +271,40 @@ export class ParticleSystem {
 
     for (let i = 0; i < this.fireflyCount; i++) {
       const i3 = i * 3;
-      const reactivity = reactivities[i];
-      const pSpeed = 1.0 + (mid * 3.0 + bass * 2.0) * reactivity;
 
-      // Drift with sin/cos patterns
-      positions[i3]     += (velocities[i3] + Math.sin(time * 0.5 + i) * 0.05) * pSpeed;
-      positions[i3 + 1] += (velocities[i3 + 1] + Math.cos(time * 0.3 + i * 0.7) * 0.03) * pSpeed;
-      positions[i3 + 2] += (velocities[i3 + 2] + Math.cos(time * 0.4 + i * 1.3) * 0.05) * pSpeed;
+      // NEW: Make ALL particles audio-reactive (was 30% before)
+      const reactivity = 0.35 + reactivities[i] * 0.65;
+      const pSpeed = 0.45 + mid * (0.8 + turbulence) + bassEnergy * reactivity;
+      const turbulenceScale = (0.02 + turbulence * 0.08) * (1 + mid);
+      const lift = gravity * (0.004 + bassEnergy * 0.035);
+
+      // NEW: Apply gravity (particles fall/rise based on parameter)
+      velocities[i3 + 1] += lift;
+
+      // NEW: Apply turbulence (chaos in movement)
+      const noiseX = Math.sin(time * 0.7 + i) * turbulenceScale;
+      const noiseZ = Math.cos(time * 0.5 + i * 0.7) * turbulenceScale;
+
+      // Drift with sin/cos patterns + turbulence
+      positions[i3]     += (velocities[i3] + noiseX) * pSpeed;
+      positions[i3 + 1] += (velocities[i3 + 1] + Math.cos(time * 0.3 + i * 0.7) * 0.02) * pSpeed;
+      positions[i3 + 2] += (velocities[i3 + 2] + noiseZ) * pSpeed;
+
+      // NEW: Treble burst — particles explode outward on high-frequency spikes
+      if (trebleSpike > 0) {
+        const px = positions[i3];
+        const py = positions[i3 + 1];
+        const pz = positions[i3 + 2];
+        const dist = Math.sqrt(px * px + py * py + pz * pz) + 0.1;
+        const impulse = trebleSpike * (0.025 + trebleReactivity * 0.08);
+        velocities[i3]     += (px / dist) * impulse;
+        velocities[i3 + 1] += (py / dist) * impulse;
+        velocities[i3 + 2] += (pz / dist) * impulse;
+      }
+
+      velocities[i3] *= 0.985;
+      velocities[i3 + 1] *= 0.985;
+      velocities[i3 + 2] *= 0.985;
 
       // Wrap around boundaries
       if (positions[i3] > halfBox) positions[i3] = -halfBox;
@@ -243,9 +318,9 @@ export class ParticleSystem {
     this.fireflyGeometry.attributes.position.needsUpdate = true;
 
     // --- Dust motes ---
-    // Dust is now just ambient background, no audio reactivity
-    this.dustMaterial.opacity = 0.3;
-    this.dustMaterial.size = (this.params.particleSize ?? 1) * 0.3;
+    this.dustPoints.visible = density > 0.02;
+    this.dustMaterial.opacity = THREE.MathUtils.clamp(0.08 + density * 0.28 + mid * 0.25, 0, 0.7);
+    this.dustMaterial.size = (0.08 + particleSize * 0.55) * (1 + mid * 0.5);
 
     const dustPos = this.dustPositions;
     const dustVel = this.dustVelocities;
@@ -253,9 +328,10 @@ export class ParticleSystem {
     for (let i = 0; i < this.dustCount; i++) {
       const i3 = i * 3;
 
-      dustPos[i3]     += dustVel[i3];
-      dustPos[i3 + 1] += dustVel[i3 + 1];
-      dustPos[i3 + 2] += dustVel[i3 + 2];
+      // NEW: Dust drifts faster during musical peaks
+      dustPos[i3]     += dustVel[i3] * (1 + bass * 0.5);
+      dustPos[i3 + 1] += dustVel[i3 + 1] * (1 + bass * 0.5);
+      dustPos[i3 + 2] += dustVel[i3 + 2] * (1 + bass * 0.5);
 
       // Wrap boundaries
       if (dustPos[i3] > halfBox) dustPos[i3] = -halfBox;

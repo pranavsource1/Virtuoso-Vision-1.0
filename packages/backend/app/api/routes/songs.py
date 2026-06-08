@@ -125,6 +125,8 @@ async def get_task_status(task_id: str, authorization: str = Header(None)):
             "result": result,
             "error": str(task.info) if status == 'FAILURE' else None
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

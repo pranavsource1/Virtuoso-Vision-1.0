@@ -5,6 +5,9 @@
 // Vertex colors blend from scene palette based on elevation. Exports a
 // `getHeightAt(x, z)` helper so other systems can query terrain height at any
 // world coordinate.
+//
+// Bass breathing is performed entirely on the GPU via onBeforeCompile vertex
+// shader injection — no per-frame CPU vertex loop.
 // =============================================================================
 
 import * as THREE from 'three';
@@ -21,7 +24,10 @@ interface TerrainParams {
   roughness?: number;
   emissiveStrength?: number;
   bassReactivity?: number;
-  colors?: { c1: string; c2: string; c3: string; c4: string; c5: string };
+  pulseIntensity?: number;
+  waveSpeed?: number;
+  cloudDensity?: number;
+  colors?: { c1?: string; c2?: string; c3?: string; c4?: string; c5?: string };
   terrainStyle?: string;
 }
 
@@ -44,9 +50,17 @@ export class TerrainGenerator {
   private mesh: THREE.Mesh;
   private geometry: THREE.PlaneGeometry;
   private material: THREE.MeshStandardMaterial;
-  private originalY: Float32Array; // stored for bass pulse overlay
   private params: TerrainParams;
   private colors: Record<string, THREE.Color>;
+
+  // GPU uniforms for bass breathing and cloud shadows
+  private breathUniforms: {
+    uBreathAmp: { value: number };
+    uBreathPhase: { value: number };
+    uTime: { value: number };
+    uBass: { value: number };
+    uCloudDensity: { value: number };
+  };
 
   // Noise parameters baked at construction time so getHeightAt stays in sync
   private freq: number;
@@ -93,12 +107,6 @@ export class TerrainGenerator {
     posAttr.needsUpdate = true;
     this.geometry.computeVertexNormals();
 
-    // Store original Y for bass pulsing
-    this.originalY = new Float32Array(vertexCount);
-    for (let i = 0; i < vertexCount; i++) {
-      this.originalY[i] = posAttr.getY(i);
-    }
-
     // ------- vertex colors based on height -------
     const colorAttr = new Float32Array(vertexCount * 3);
     const c1 = colors.c1 ?? new THREE.Color(0x1a7a3a); // deep green fallback
@@ -110,14 +118,14 @@ export class TerrainGenerator {
     // Determine height range for normalization
     let minH = Infinity, maxH = -Infinity;
     for (let i = 0; i < vertexCount; i++) {
-      const h = this.originalY[i];
+      const h = posAttr.getY(i);
       if (h < minH) minH = h;
       if (h > maxH) maxH = h;
     }
     const range = maxH - minH || 1;
 
     for (let i = 0; i < vertexCount; i++) {
-      const h = this.originalY[i];
+      const h = posAttr.getY(i);
       const t = (h - minH) / range; // 0..1
 
       if (t < 0.3) {
@@ -140,7 +148,16 @@ export class TerrainGenerator {
     }
     this.geometry.setAttribute('color', new THREE.BufferAttribute(colorAttr, 3));
 
-    // ------- material -------
+    // ------- GPU breathing and shadow uniforms -------
+    this.breathUniforms = {
+      uBreathAmp: { value: 0.0 },
+      uBreathPhase: { value: 0.0 },
+      uTime: { value: 0.0 },
+      uBass: { value: 0.0 },
+      uCloudDensity: { value: params.cloudDensity ?? 0.5 },
+    };
+
+    // ------- material (with onBeforeCompile for GPU breathing) -------
     const emissiveColor = colors.c5 ?? new THREE.Color(0x112211);
     this.material = new THREE.MeshStandardMaterial({
       vertexColors: true,
@@ -151,6 +168,96 @@ export class TerrainGenerator {
       flatShading: false,
       side: THREE.FrontSide,
     });
+
+    // Inject bass breathing into the vertex shader via onBeforeCompile
+    const uniforms = this.breathUniforms;
+    this.material.onBeforeCompile = (shader) => {
+      // Add our custom uniforms
+      shader.uniforms.uBreathAmp = uniforms.uBreathAmp;
+      shader.uniforms.uBreathPhase = uniforms.uBreathPhase;
+      shader.uniforms.uTime = uniforms.uTime;
+      shader.uniforms.uBass = uniforms.uBass;
+      shader.uniforms.uCloudDensity = uniforms.uCloudDensity;
+
+      // Inject uniform declarations at the top of the vertex shader
+      shader.vertexShader = shader.vertexShader.replace(
+        '#include <common>',
+        /* glsl */ `
+        #include <common>
+        uniform float uBreathAmp;
+        uniform float uBreathPhase;
+        varying vec2 vWorldPositionXZ;
+        `
+      );
+
+      // Inject displacement after the vertex position is computed
+      // We displace along the normal direction for organic breathing
+      shader.vertexShader = shader.vertexShader.replace(
+        '#include <begin_vertex>',
+        /* glsl */ `
+        #include <begin_vertex>
+        // Bass breathing: sinusoidal displacement along normal
+        // Phase varies spatially for organic wave propagation
+        float localPhase = (position.x + position.z) * 0.002;
+        float breathe = sin(uBreathPhase + localPhase) * uBreathAmp;
+        transformed += normal * breathe;
+        
+        vWorldPositionXZ = (modelMatrix * vec4(position, 1.0)).xz;
+        `
+      );
+
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <common>',
+        /* glsl */ `
+        #include <common>
+        uniform float uTime;
+        uniform float uBass;
+        uniform float uCloudDensity;
+        varying vec2 vWorldPositionXZ;
+
+        float hash_t(vec2 p) {
+          p = fract(p * vec2(234.34, 435.345));
+          p += dot(p, p + 34.23);
+          return fract(p.x * p.y);
+        }
+
+        float noise_t(vec2 p) {
+          vec2 i = floor(p);
+          vec2 f = fract(p);
+          float a = hash_t(i);
+          float b = hash_t(i + vec2(1.0, 0.0));
+          float c = hash_t(i + vec2(0.0, 1.0));
+          float d = hash_t(i + vec2(1.0, 1.0));
+          vec2 u = f * f * (3.0 - 2.0 * f);
+          return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+        }
+
+        float fbm_t(vec2 p) {
+          float value = 0.0;
+          float amplitude = 0.5;
+          float frequency = 1.0;
+          for (int i = 0; i < 5; i++) {
+            value += amplitude * noise_t(p * frequency);
+            frequency *= 2.0;
+            amplitude *= 0.5;
+          }
+          return value;
+        }
+        `
+      );
+
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <color_fragment>',
+        /* glsl */ `
+        #include <color_fragment>
+        vec2 cloudUV = vWorldPositionXZ * 0.003 + uTime * (0.01 + uBass * 0.02);
+        float cloudNoise = fbm_t(cloudUV);
+        float cloudShadow = smoothstep(1.0 - uCloudDensity, 1.2 - uCloudDensity, cloudNoise);
+        float shadowStrength = (0.2 + uCloudDensity * 0.3) * cloudShadow;
+        diffuseColor.rgb *= 1.0 - (shadowStrength * 0.7); // Darken by up to 70% under clouds
+        `
+      );
+    };
 
     // ------- mesh -------
     this.mesh = new THREE.Mesh(this.geometry, this.material);
@@ -201,31 +308,32 @@ export class TerrainGenerator {
   }
 
   // -------------------------------------------------------------------------
-  // Per-frame update — subtle bass breathing
+  // Per-frame update — GPU-driven bass breathing via uniforms
   // -------------------------------------------------------------------------
 
-  update(bass: number, _mid: number, _treble: number, time: number): void {
-    const posAttr = this.geometry.getAttribute('position') as THREE.BufferAttribute;
-    const vertexCount = posAttr.count;
+  update(bass: number, _mid: number, _treble: number, time: number, params?: TerrainParams): void {
+    const liveParams = params ?? this.params;
 
-    // Very subtle breathing: amplitude proportional to bass
-    const reactivity = this.params.bassReactivity ?? 0.5;
-    const breathAmp = bass * reactivity * 0.4; // keep it gentle
-    const breathPhase = time * 0.5;
+    // Compute breathing amplitude and phase — just two uniform updates!
+    const bassReact = liveParams.bassReactivity ?? this.params.bassReactivity ?? 0.5;
+    const pulseIntensity = liveParams.pulseIntensity ?? this.params.pulseIntensity ?? 0.3;
+    
+    // Breathing amplitude based on bass
+    const targetAmp = bass * bassReact * 0.5 * pulseIntensity;
+    this.breathUniforms.uBreathAmp.value += (targetAmp - this.breathUniforms.uBreathAmp.value) * 0.1;
+    this.breathUniforms.uBreathPhase.value += 0.05 + bass * bassReact * 0.1;
 
-    for (let i = 0; i < vertexCount; i++) {
-      const baseY = this.originalY[i];
-      // Breathing varies slightly across the surface for organic feel
-      const x = posAttr.getX(i);
-      const z = posAttr.getZ(i);
-      const localPhase = (x + z) * 0.002;
-      const pulse = Math.sin(breathPhase + localPhase) * breathAmp;
-      posAttr.setY(i, baseY + pulse);
+    this.breathUniforms.uTime.value = time;
+    this.breathUniforms.uBass.value = bass;
+    if (liveParams.cloudDensity !== undefined) {
+      this.breathUniforms.uCloudDensity.value = liveParams.cloudDensity;
     }
-    posAttr.needsUpdate = true;
 
-    // Recompute normals for correct lighting after displacement
-    this.geometry.computeVertexNormals();
+    // Update material properties
+    this.material.metalness = liveParams.metalness ?? this.params.metalness ?? 0.1;
+    this.material.roughness = liveParams.roughness ?? this.params.roughness ?? 0.85;
+    this.material.emissiveIntensity =
+      (liveParams.emissiveStrength ?? this.params.emissiveStrength ?? 0.1) * 0.3;
   }
 
   // -------------------------------------------------------------------------

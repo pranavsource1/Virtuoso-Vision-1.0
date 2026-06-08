@@ -1,7 +1,8 @@
 import * as THREE from 'three';
+import { SeededRandom } from './noise';
 
 interface SP {
-  colors?: { c1: string; c2: string; c3: string; c4: string; c5: string };
+  colors?: { c1?: string; c2?: string; c3?: string; c4?: string; c5?: string };
   geometryComplexity?: number;
   geometryDistortion?: number;
   geometrySharpness?: number;
@@ -42,6 +43,7 @@ export class StructureGenerator {
   private emissiveMaterials: THREE.MeshStandardMaterial[] = [];
   private pointLights: THREE.PointLight[] = [];
   private disposables: { geometry?: THREE.BufferGeometry; material?: THREE.Material }[] = [];
+  private rng: SeededRandom;
 
   constructor(
     scene: THREE.Scene,
@@ -53,6 +55,7 @@ export class StructureGenerator {
     this.colors = colors;
     this.params = params;
     this.getHeightAt = getHeightAt;
+    this.rng = new SeededRandom(257);
 
     this.createStructures();
   }
@@ -61,6 +64,12 @@ export class StructureGenerator {
     const type = this.params.structureType || 'monoliths';
 
     if (type === 'none') return;
+
+    // Single soft fill light for all structures (replaces per-structure PointLights)
+    const fillLight = new THREE.PointLight(new THREE.Color(0xffcc77), 0.6, 200);
+    fillLight.position.set(0, 20, 0);
+    this.scene.add(fillLight);
+    this.pointLights.push(fillLight);
 
     if (type === 'ruins') {
       for (let i = 0; i < 15; i++) this.createRuins(i);
@@ -80,8 +89,8 @@ export class StructureGenerator {
    */
   private findPlacement(minRadius: number, maxRadius: number, index: number, total: number): THREE.Vector3 | null {
     const angleStep = (Math.PI * 2) / total;
-    const baseAngle = angleStep * index + (Math.random() - 0.5) * angleStep * 0.6;
-    const radius = minRadius + Math.random() * (maxRadius - minRadius);
+    const baseAngle = angleStep * index + (this.rng.next() - 0.5) * angleStep * 0.6;
+    const radius = minRadius + this.rng.next() * (maxRadius - minRadius);
 
     const x = Math.cos(baseAngle) * radius;
     const z = Math.sin(baseAngle) * radius;
@@ -90,8 +99,8 @@ export class StructureGenerator {
     if (y < -10) {
       // Try a few alternative positions before giving up
       for (let attempt = 0; attempt < 5; attempt++) {
-        const altAngle = baseAngle + (Math.random() - 0.5) * 1.0;
-        const altRadius = minRadius + Math.random() * (maxRadius - minRadius);
+        const altAngle = baseAngle + (this.rng.next() - 0.5) * 1.0;
+        const altRadius = minRadius + this.rng.next() * (maxRadius - minRadius);
         const ax = Math.cos(altAngle) * altRadius;
         const az = Math.sin(altAngle) * altRadius;
         const ay = this.getHeightAt(ax, az);
@@ -115,7 +124,7 @@ export class StructureGenerator {
 
     const group = new THREE.Group();
     group.position.copy(pos);
-    group.rotation.y = Math.random() * Math.PI * 2;
+    group.rotation.y = this.rng.next() * Math.PI * 2;
 
     const metalness = this.params.metalness ?? 0.3;
     const roughness = this.params.roughness ?? 0.6;
@@ -148,13 +157,13 @@ export class StructureGenerator {
     this.trackDisposable(roofGeo, roofMat);
 
     // Windows (2-3 per tower)
-    const windowCount = 2 + Math.floor(Math.random() * 2);
+    const windowCount = 2 + Math.floor(this.rng.next() * 2);
     for (let w = 0; w < windowCount; w++) {
       const winGeo = new THREE.BoxGeometry(0.5, 0.7, 0.1);
       const winMat = new THREE.MeshStandardMaterial({
         color: new THREE.Color(0xffd699),
         emissive: new THREE.Color(0xffaa33),
-        emissiveIntensity: 0.8,
+        emissiveIntensity: 2.5,
       });
       const win = new THREE.Mesh(winGeo, winMat);
       const winAngle = (w / windowCount) * Math.PI * 2;
@@ -179,15 +188,7 @@ export class StructureGenerator {
       this.emissiveMaterials.push(winMat);
     }
 
-    // Point light for the tower
-    const light = new THREE.PointLight(
-      new THREE.Color(0xffcc77),
-      1.5,
-      30
-    );
-    light.position.y = 8;
-    group.add(light);
-    this.pointLights.push(light);
+    // Glow handled by emissive materials + bloom pass (no PointLight needed)
 
     this.scene.add(group);
     this.groups.push(group);
@@ -199,7 +200,7 @@ export class StructureGenerator {
 
     const group = new THREE.Group();
     group.position.copy(pos);
-    group.rotation.y = Math.random() * Math.PI * 2;
+    group.rotation.y = this.rng.next() * Math.PI * 2;
 
     const metalness = this.params.metalness ?? 0.3;
     const roughness = this.params.roughness ?? 0.6;
@@ -327,7 +328,7 @@ export class StructureGenerator {
     const orbMat = new THREE.MeshStandardMaterial({
       color: orbColor,
       emissive: orbColor,
-      emissiveIntensity: 1.0,
+      emissiveIntensity: 3.0,
       transparent: true,
       opacity: 0.9,
     });
@@ -337,15 +338,7 @@ export class StructureGenerator {
     this.trackDisposable(orbGeo, orbMat);
     this.emissiveMaterials.push(orbMat);
 
-    // Point light from the lantern
-    const light = new THREE.PointLight(
-      orbColor.clone(),
-      1.2,
-      20
-    );
-    light.position.set(0.5, 5.3, 0);
-    group.add(light);
-    this.pointLights.push(light);
+    // Glow handled by emissive materials + bloom pass (no PointLight needed)
 
     this.scene.add(group);
     this.groups.push(group);
@@ -357,30 +350,30 @@ export class StructureGenerator {
 
     const group = new THREE.Group();
     group.position.copy(pos);
-    group.rotation.y = Math.random() * Math.PI * 2;
+    group.rotation.y = this.rng.next() * Math.PI * 2;
 
     // Create 3-5 columns of varying heights
-    const columnCount = 3 + Math.floor(Math.random() * 3);
+    const columnCount = 3 + Math.floor(this.rng.next() * 3);
     for (let c = 0; c < columnCount; c++) {
-      const height = 3 + Math.random() * 7;
-      const radius = 0.5 + Math.random() * 0.5;
+      const height = 3 + this.rng.next() * 7;
+      const radius = 0.5 + this.rng.next() * 0.5;
       const colGeo = new THREE.CylinderGeometry(radius, radius * 1.1, height, 8);
       const colMat = new THREE.MeshStandardMaterial({
-        color: new THREE.Color(0x8a8a7a).lerp(new THREE.Color(0x6b6b60), Math.random()),
+        color: new THREE.Color(0x8a8a7a).lerp(new THREE.Color(0x6b6b60), this.rng.next()),
         metalness: 0.1,
         roughness: 0.95,
       });
       const col = new THREE.Mesh(colGeo, colMat);
 
       // Spread columns around
-      const cx = (Math.random() - 0.5) * 8;
-      const cz = (Math.random() - 0.5) * 8;
+      const cx = (this.rng.next() - 0.5) * 8;
+      const cz = (this.rng.next() - 0.5) * 8;
       col.position.set(cx, height / 2, cz);
 
       // Some columns are tilted (ruined)
-      if (Math.random() > 0.5) {
-        col.rotation.x = (Math.random() - 0.5) * 0.3;
-        col.rotation.z = (Math.random() - 0.5) * 0.3;
+      if (this.rng.next() > 0.5) {
+        col.rotation.x = (this.rng.next() - 0.5) * 0.3;
+        col.rotation.z = (this.rng.next() - 0.5) * 0.3;
       }
 
       col.castShadow = true;
@@ -406,16 +399,29 @@ export class StructureGenerator {
     this.groups.push(group);
   }
 
-  update(bass: number, mid: number, treble: number, time: number): void {
-    // Pulse emissive materials with bass
-    const emissiveIntensity = 0.5 + bass * 1.0;
+  update(bass: number, mid: number, treble: number, time: number, params?: SP): void {
+    const liveParams = params ?? this.params;
+    const bassReact = liveParams.bassReactivity ?? this.params.bassReactivity ?? 0.6;
+    const trebleReact = liveParams.trebleReactivity ?? this.params.trebleReactivity ?? 0.4;
+    const pulseIntensity = liveParams.pulseIntensity ?? this.params.pulseIntensity ?? 0.3;
+    const rotationSpeed = liveParams.rotationSpeed ?? this.params.rotationSpeed ?? 0.4;
+    const emissiveStrength = liveParams.emissiveStrength ?? this.params.emissiveStrength ?? 0.5;
+    const pulse = (Math.sin(time * (0.8 + rotationSpeed * 2.0)) * 0.5 + 0.5) * pulseIntensity;
+    const emissiveIntensity =
+      emissiveStrength * (0.6 + bass * bassReact * 0.8 + treble * trebleReact * 0.4 + pulse);
+
     for (const mat of this.emissiveMaterials) {
       mat.emissiveIntensity = emissiveIntensity;
     }
 
-    // Pulse point light intensities with bass
+    // Pulse the single fill light gently
     for (const light of this.pointLights) {
-      light.intensity = 1.0 + bass * 0.8;
+      light.intensity = 0.4 + bass * bassReact * 0.3 + pulse * 0.2;
+    }
+
+    const rotationDelta = (rotationSpeed - 0.5) * 0.0015 + bass * bassReact * 0.0008;
+    for (const group of this.groups) {
+      group.rotation.y += rotationDelta;
     }
   }
 

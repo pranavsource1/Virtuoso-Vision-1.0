@@ -11,6 +11,9 @@ from app.config import get_settings
 from app.ml.mood_classifier import mood_classifier
 from app.ml.ollama_wrapper import ollama_service as lyric_ollama_service
 from app.ml.whisper_wrapper import WhisperService
+from app.ml.audio_features import audio_feature_extractor  # NEW
+from app.ml.lyric_sentiment import lyric_sentiment_analyzer  # NEW
+from app.ml.song_structure import song_structure_detector  # NEW
 from app.models import AudioFeatures, MoodEnum, SceneParameters
 from app.services.mongodb_service import mongodb_service
 from app.services.supabase_service import supabase_service
@@ -108,6 +111,21 @@ def process_song_pipeline(self, song_id: str, audio_url: str, user_id: str, vibe
         self.update_state(state='PROGRESS', meta={'current_stage': 2, 'progress': 50})
         mood = run_async(mood_classifier.classify_mood(full_lyrics))
 
+        print("Step 3b: Extracting audio features...")  # NEW
+        self.update_state(state='PROGRESS', meta={'current_stage': 2, 'progress': 55})
+        audio_features = run_async(audio_feature_extractor.extract_features(audio_path))
+
+        print("Step 3c: Analyzing lyric sentiment...")  # NEW
+        self.update_state(state='PROGRESS', meta={'current_stage': 2, 'progress': 60})
+        lyrics_with_sentiment = run_async(lyric_sentiment_analyzer.analyze_lyrics(
+            [seg.dict() for seg in lyrics_segments]
+        ))
+
+        print("Step 3d: Detecting song sections...")  # NEW
+        self.update_state(state='PROGRESS', meta={'current_stage': 3, 'progress': 65})
+        song_sections_result = run_async(song_structure_detector.detect_sections(audio_path))
+        song_sections = song_sections_result.get("sections", [])
+
         print("Step 4: Generating visual prompt with local Ollama...")
         self.update_state(state='PROGRESS', meta={'current_stage': 3, 'progress': 70})
         visual_prompt = run_async(
@@ -124,14 +142,33 @@ def process_song_pipeline(self, song_id: str, audio_url: str, user_id: str, vibe
         if not scene_params:
             scene_params = SceneParameters()
 
+        print("Step 6: Generating scene choreography...")  # NEW
+        self.update_state(state='PROGRESS', meta={'current_stage': 5, 'progress': 88})
+        choreography = run_async(
+            lyric_ollama_service.generate_scene_choreography(
+                base_parameters=scene_params,
+                song_sections=song_sections,
+                lyrical_moments=[
+                    {"timestamp": seg["timestamp"], "sentiment": seg.get("sentiment", "neutral"),
+                     "intensity": seg.get("intensity", 0.5), "text": seg.get("text", "")}
+                    for seg in lyrics_with_sentiment
+                    if seg.get("intensity", 0.5) > 0.6  # Only high-intensity moments
+                ],
+                mood=mood.value,
+                song_title="",
+                audio_features=audio_features
+            )
+        )
+
         print("Updating song in database...")
-        self.update_state(state='PROGRESS', meta={'current_stage': 4, 'progress': 95})
+        self.update_state(state='PROGRESS', meta={'current_stage': 5, 'progress': 95})
         update_data = {
-            "lyrics": [seg.dict() for seg in lyrics_segments],
+            "lyrics": lyrics_with_sentiment,  # NEW: Include sentiment and intensity
             "mood": mood.value,
-            "audioFeatures": AudioFeatures().dict(),
+            "audioFeatures": audio_features,  # NEW: Full features instead of defaults
             "visualDescription": visual_prompt,
             "sceneParameters": scene_params.dict(),
+            "sceneChoreography": choreography,  # NEW: Add choreography
             "audioUrl": audio_public_url,
             "thumbnailUrl": thumbnail_url,
             "duration": audio_duration,
