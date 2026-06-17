@@ -258,7 +258,7 @@ def download_audio_sync(audio_url: str, song_id: str) -> Optional[Tuple[str, str
             "writethumbnail": True,
             "extractor_args": {
                 "youtube": {
-                    "player_client": ["mweb", "web"],
+                    "player_client": ["android", "ios", "web"],
                 }
             },
             "js_runtimes": {"node": {}},

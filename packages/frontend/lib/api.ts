@@ -255,26 +255,6 @@ export async function registerUser(email: string, displayName: string) {
   );
 }
 
-export async function loginUser(email: string) {
-  return apiCall(
-    '/api/auth/login',
-    {
-      method: 'POST',
-      body: JSON.stringify({ email }),
-    }
-  );
-}
-
-export async function checkAuthStatus() {
-  const token = await getAuthToken();
-  if (!token) return { data: null, error: 'No token found' };
-
-  return apiCall(
-    '/api/auth/me',
-    { method: 'GET' }
-  );
-}
-
 // ============ UTILITY FUNCTIONS ============
 
 /**
@@ -329,15 +309,5 @@ export async function startMusicWorldGeneration(songId: string) {
   return apiCall<{ task_id: string; status: string; song_id: string; message: string }>(
     `/api/generation/music-world/${songId}`,
     { method: 'POST' }
-  );
-}
-
-/**
- * Poll the status of a music world generation task
- */
-export async function getMusicWorldStatus(taskId: string) {
-  return apiCall<GenerationStatusResponse>(
-    `/api/generation/music-world/${taskId}/status`,
-    { method: 'GET' }
   );
 }
